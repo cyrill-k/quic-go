@@ -31,7 +31,7 @@ var SupportedVersions = []VersionNumber{VersionDraft32, VersionDraft29}
 
 // IsValidVersion says if the version is known to quic-go
 func IsValidVersion(v VersionNumber) bool {
-	return v == VersionTLS || IsSupportedVersion(SupportedVersions, v)
+	return v == VersionTLS || v == VersionMilestone0_10_0 || IsSupportedVersion(SupportedVersions, v)
 }
 
 func (vn VersionNumber) String() string {
