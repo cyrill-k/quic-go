@@ -8,6 +8,11 @@ import (
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 )
 
+// Opener opens a packet
+type Opener interface {
+	Open(dst, src []byte, packetNumber protocol.PacketNumber, associatedData []byte) ([]byte, error)
+}
+
 // Sealer seals a packet
 type Sealer interface {
 	Seal(dst, src []byte, packetNumber protocol.PacketNumber, associatedData []byte) []byte
