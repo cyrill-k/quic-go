@@ -2,11 +2,11 @@
 
 <img src="docs/quic.png" width=303 height=124>
 
-[![Godoc Reference](https://img.shields.io/badge/godoc-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/lucas-clemente/quic-go)
-[![Travis Build Status](https://img.shields.io/travis/lucas-clemente/quic-go/master.svg?style=flat-square&label=Travis+build)](https://travis-ci.org/lucas-clemente/quic-go)
-[![CircleCI Build Status](https://img.shields.io/circleci/project/github/lucas-clemente/quic-go.svg?style=flat-square&label=CircleCI+build)](https://circleci.com/gh/lucas-clemente/quic-go)
-[![Windows Build Status](https://img.shields.io/appveyor/ci/lucas-clemente/quic-go/master.svg?style=flat-square&label=windows+build)](https://ci.appveyor.com/project/lucas-clemente/quic-go/branch/master)
-[![Code Coverage](https://img.shields.io/codecov/c/github/lucas-clemente/quic-go/master.svg?style=flat-square)](https://codecov.io/gh/lucas-clemente/quic-go/)
+[![Godoc Reference](https://img.shields.io/badge/godoc-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/cyrill-k/quic-go)
+[![Travis Build Status](https://img.shields.io/travis/cyrill-k/quic-go/master.svg?style=flat-square&label=Travis+build)](https://travis-ci.org/cyrill-k/quic-go)
+[![CircleCI Build Status](https://img.shields.io/circleci/project/github/cyrill-k/quic-go.svg?style=flat-square&label=CircleCI+build)](https://circleci.com/gh/cyrill-k/quic-go)
+[![Windows Build Status](https://img.shields.io/appveyor/ci/cyrill-k/quic-go/master.svg?style=flat-square&label=windows+build)](https://ci.appveyor.com/project/cyrill-k/quic-go/branch/master)
+[![Code Coverage](https://img.shields.io/codecov/c/github/cyrill-k/quic-go/master.svg?style=flat-square)](https://codecov.io/gh/cyrill-k/quic-go/)
 
 quic-go is an implementation of the [QUIC](https://en.wikipedia.org/wiki/QUIC) protocol in Go.
 
@@ -70,4 +70,4 @@ http.Client{
 
 ## Contributing
 
-We are always happy to welcome new contributors! We have a number of self-contained issues that are suitable for first-time contributors, they are tagged with [help wanted](https://github.com/lucas-clemente/quic-go/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22). If you have any questions, please feel free to reach out by opening an issue or leaving a comment.
+We are always happy to welcome new contributors! We have a number of self-contained issues that are suitable for first-time contributors, they are tagged with [help wanted](https://github.com/cyrill-k/quic-go/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22). If you have any questions, please feel free to reach out by opening an issue or leaving a comment.

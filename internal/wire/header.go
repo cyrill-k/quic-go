@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lucas-clemente/quic-go/internal/protocol"
-	"github.com/lucas-clemente/quic-go/internal/utils"
+	"github.com/cyrill-k/quic-go/internal/protocol"
+	"github.com/cyrill-k/quic-go/internal/utils"
 )
 
 // Header is the header of a QUIC packet.

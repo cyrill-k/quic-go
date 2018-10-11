@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	_ "github.com/lucas-clemente/quic-go/integrationtests/tools/testlog"
-	"github.com/lucas-clemente/quic-go/integrationtests/tools/testserver"
+	_ "github.com/cyrill-k/quic-go/integrationtests/tools/testlog"
+	"github.com/cyrill-k/quic-go/integrationtests/tools/testserver"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -40,6 +40,6 @@ func init() {
 	if !ok {
 		panic("Failed to get current path")
 	}
-	clientPath = filepath.Join(thisfile, fmt.Sprintf("../../../../quic-clients/client-%s-debug", runtime.GOOS))
-	serverPath = filepath.Join(thisfile, fmt.Sprintf("../../../../quic-clients/server-%s-debug", runtime.GOOS))
+	clientPath = filepath.Join(thisfile, fmt.Sprintf("../../../../../lucas-clemente/quic-clients/client-%s-debug", runtime.GOOS))
+	serverPath = filepath.Join(thisfile, fmt.Sprintf("../../../../../lucas-clemente/quic-clients/server-%s-debug", runtime.GOOS))
 }
