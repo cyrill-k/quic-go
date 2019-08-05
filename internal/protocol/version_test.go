@@ -15,8 +15,8 @@ var _ = Describe("Version", func() {
 		Expect(IsValidVersion(VersionMilestone0_17)).To(BeTrue())
 		Expect(IsValidVersion(VersionWhatever)).To(BeFalse())
 		Expect(IsValidVersion(VersionUnknown)).To(BeFalse())
-		Expect(IsValidVersion(VersionDraft29)).To(BeFalse())
-		Expect(IsValidVersion(VersionDraft32)).To(BeFalse())
+		Expect(IsValidVersion(VersionDraft29)).To(BeTrue())
+		Expect(IsValidVersion(VersionDraft32)).To(BeTrue())
 		Expect(IsValidVersion(1234)).To(BeFalse())
 	})
 
@@ -25,7 +25,6 @@ var _ = Describe("Version", func() {
 	})
 
 	It("has the right string representation", func() {
-		Expect(VersionMilestone0_17.String()).To(ContainSubstring("QUIC WG draft-29"))
 		Expect(VersionWhatever.String()).To(Equal("whatever"))
 		Expect(VersionUnknown.String()).To(Equal("unknown"))
 		Expect(VersionDraft29.String()).To(Equal("draft-29"))
