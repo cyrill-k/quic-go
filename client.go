@@ -138,7 +138,7 @@ func DialEarly(
 	host string,
 	tlsConf *tls.Config,
 	config *Config,
-) (Session, error) {
+) (EarlySession, error) {
 	return dialContext(context.Background(), pconn, remoteAddr, host, tlsConf, config, true, false)
 }
 
