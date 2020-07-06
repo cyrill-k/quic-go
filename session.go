@@ -1043,7 +1043,7 @@ func (s *session) handleUnpackedPacket(
 		// Only process frames now if we're not logging.
 		// If we're logging, we need to make sure that the packet_received event is logged first.
 		if s.tracer == nil {
-			if err := s.handleFrame(frame, packet.encryptionLevel); err != nil {
+			if err := s.handleFrame(frame, packet.encryptionLevel, packet.hdr.DestConnectionID); err != nil {
 				return err
 			}
 		}
