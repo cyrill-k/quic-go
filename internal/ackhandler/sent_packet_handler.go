@@ -200,13 +200,13 @@ func (h *sentPacketHandler) dropPackets(encLevel protocol.EncryptionLevel) {
 	default:
 		panic(fmt.Sprintf("Cannot drop keys for encryption level %s", encLevel))
 	}
-	h.setLossDetectionTimer()
 	if h.tracer != nil && h.ptoCount != 0 {
 		h.tracer.UpdatedPTOCount(0)
 	}
 	h.ptoCount = 0
 	h.numProbesToSend = 0
 	h.ptoMode = SendNone
+	h.setLossDetectionTimer()
 }
 
 func (s *sentPacketHandler) ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool {
