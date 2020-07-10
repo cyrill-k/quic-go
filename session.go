@@ -86,13 +86,13 @@ func (p *receivedPacket) Clone() *receivedPacket {
 
 type sessionRunner interface {
 	Add(protocol.ConnectionID, packetHandler) bool
-	GetStatelessResetToken(protocol.ConnectionID) [16]byte
+	GetStatelessResetToken(protocol.ConnectionID) protocol.StatelessResetToken
 	Retire(protocol.ConnectionID)
 	Remove(protocol.ConnectionID)
 	ReplaceWithClosed(protocol.ConnectionID, packetHandler)
-	AddResetToken([16]byte, packetHandler)
-	RemoveResetToken([16]byte)
-	RetireResetToken([16]byte)
+	AddResetToken(protocol.StatelessResetToken, packetHandler)
+	RemoveResetToken(protocol.StatelessResetToken)
+	RetireResetToken(protocol.StatelessResetToken)
 }
 
 type handshakeRunner struct {
@@ -229,7 +229,7 @@ var newSession = func(
 	clientDestConnID protocol.ConnectionID,
 	destConnID protocol.ConnectionID,
 	srcConnID protocol.ConnectionID,
-	statelessResetToken [16]byte,
+	statelessResetToken protocol.StatelessResetToken,
 	conf *Config,
 	tlsConf *tls.Config,
 	tokenGenerator *handshake.TokenGenerator,
@@ -258,7 +258,7 @@ var newSession = func(
 	}
 	s.connIDManager = newConnIDManager(
 		destConnID,
-		func(token [16]byte) { runner.AddResetToken(token, s) },
+		func(token protocol.StatelessResetToken) { runner.AddResetToken(token, s) },
 		runner.RemoveResetToken,
 		runner.RetireResetToken,
 		s.queueControlFrame,
@@ -381,7 +381,7 @@ var newClientSession = func(
 	}
 	s.connIDManager = newConnIDManager(
 		destConnID,
-		func(token [16]byte) { runner.AddResetToken(token, s) },
+		func(token protocol.StatelessResetToken) { runner.AddResetToken(token, s) },
 		runner.RemoveResetToken,
 		runner.RetireResetToken,
 		s.queueControlFrame,
@@ -1320,7 +1320,7 @@ func (s *session) handleCloseError(closeErr closeError) {
 		if nerr, ok := closeErr.err.(net.Error); !ok || !nerr.Timeout() {
 			var resetErr statelessResetErr
 			if errors.As(closeErr.err, &resetErr) {
-				s.tracer.ClosedConnection(logging.NewStatelessResetCloseReason(&resetErr.token))
+				s.tracer.ClosedConnection(logging.NewStatelessResetCloseReason(resetErr.token))
 			} else if quicErr.IsApplicationError() {
 				s.tracer.ClosedConnection(logging.NewApplicationCloseReason(quicErr.ErrorCode, closeErr.remote))
 			} else {
