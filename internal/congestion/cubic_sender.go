@@ -226,7 +226,15 @@ func (c *cubicSender) maybeIncreaseCwnd(ackedPacketNumber protocol.PacketNumber,
 			c.congestionWindowCount = 0
 		}
 	} else {
+		// cwndAfterAck := c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT())
+		// cwndAfterAck += c.cwndAddDelta
+		// c.cwndAddDelta = 0
+
 		c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT()))
+
+		// if c.isThirdPhaseValue {
+		//     c.cubic.CongestionWindowAfterPacketLoss
+		// }
 	}
 }
 

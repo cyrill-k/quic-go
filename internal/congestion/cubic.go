@@ -65,6 +65,16 @@ type Cubic struct {
 	timeToOriginPoint uint32
 	// Last congestion window in packets computed by cubic function.
 	lastTargetCongestionWindow protocol.PacketNumber
+
+	lastMaxCongestionWindowAddDelta int16
+	cwndAddDelta                    int16
+	betaLastMaxNewValue             float32
+	isThirdPhaseValue               bool
+	// compare to netlink / tcp cubic c implementation: http://www.yonch.com/tech/linux-tcp-congestion-control-internals
+	// ssthresh: called from tcp_init_cwnd_reduction and tcp_enter_loss
+	// analogous function in QUIC -> CongestionWindowAfterPacketLoss
+	// cong_avoid: called from tcp_ack if tcp_may_raise_cwnd returns true
+	// analogous function in QUIC -> maybeIncreaseCwnd
 }
 
 // NewCubic returns a new Cubic instance
@@ -128,6 +138,9 @@ func (c *Cubic) OnApplicationLimited() {
 // a loss event. Returns the new congestion window in packets. The new
 // congestion window is a multiplicative decrease of our current window.
 func (c *Cubic) CongestionWindowAfterPacketLoss(currentCongestionWindow protocol.PacketNumber) protocol.PacketNumber {
+	// c.betaLastMax = c.betaLastMaxNewValue
+	// we probably need to change c.beta() as well
+
 	if currentCongestionWindow < c.lastMaxCongestionWindow {
 		// We never reached the old max, so assume we are competing with another
 		// flow. Use our extra back off factor to allow the other flow to go up.
@@ -136,6 +149,10 @@ func (c *Cubic) CongestionWindowAfterPacketLoss(currentCongestionWindow protocol
 		c.lastMaxCongestionWindow = currentCongestionWindow
 	}
 	c.epoch = time.Time{} // Reset time.
+
+	// c.lastMaxCongestionWindow += c.lastMaxCongestionWindowAddDelta
+	// c.lastMaxCongestionWindowAddDelta = 0
+
 	return protocol.PacketNumber(float32(currentCongestionWindow) * c.beta())
 }
 
