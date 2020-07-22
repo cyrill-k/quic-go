@@ -69,7 +69,7 @@ type sentPacketHandler struct {
 	bytesInFlight protocol.ByteCount
 
 	congestion congestion.SendAlgorithmWithDebugInfos
-	rttStats   *congestion.RTTStats
+	rttStats   *utils.RTTStats
 
 	// The number of times a PTO has been sent without receiving an ack.
 	ptoCount uint32
@@ -125,7 +125,7 @@ func newFlowteleSentPacketHandler(
 
 func newSentPacketHandler(
 	initialPacketNumber protocol.PacketNumber,
-	rttStats *congestion.RTTStats,
+	rttStats *utils.RTTStats,
 	pers protocol.Perspective,
 	traceCallback func(quictrace.Event),
 	tracer logging.ConnectionTracer,
