@@ -2,6 +2,7 @@ package congestion
 
 import (
 	"time"
+	"math"
 	"fmt"
 
 	"github.com/lucas-clemente/quic-go/internal/protocol"
@@ -103,8 +104,8 @@ func (c *flowteleCubicSender) adjustCongestionWindow() {
 			srtt := c.rttStats.SmoothedRTT()
 			// If we haven't measured an rtt, we cannot estimate the cwnd
 			if srtt != 0 {
-				c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, protocol.PacketNumber(DeltaBytesFromBandwidth(c.fixedBandwidth, srtt)))
-				fmt.Printf("FLOWTELE CC: set congestion window to %d\n", c.congestionWindow)
+				c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, protocol.PacketNumber(math.Ceil(float64(DeltaBytesFromBandwidth(c.fixedBandwidth, srtt))/float64(protocol.DefaultTCPMSS))))
+				fmt.Printf("FLOWTELE CC: set congestion window to %d (%d), fixed bw = %d, srtt = %v\n", c.GetCongestionWindow(), c.congestionWindow, c.fixedBandwidth, srtt)
 			}
 		}
 }
@@ -185,7 +186,7 @@ func (c *flowteleCubicSender) OnPacketAcked(ackedPacketNumber protocol.PacketNum
 		c.hybridSlowStart.OnPacketAcked(ackedPacketNumber)
 	}
 
-	c.flowteleSignalInterface.PacketsAcked(time.Now(), uint64(c.congestionWindow), uint64(bytesInFlight))
+	c.flowteleSignalInterface.PacketsAcked(time.Now(), uint64(c.GetCongestionWindow()), uint64(bytesInFlight))
 }
 
 func (c *flowteleCubicSender) OnPacketLost(packetNumber protocol.PacketNumber, lostBytes protocol.ByteCount, bytesInFlight protocol.ByteCount) {
