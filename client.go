@@ -133,6 +133,11 @@ func populateClientConfig(config *Config) *Config {
 		maxReceiveConnectionFlowControlWindow = protocol.DefaultMaxReceiveConnectionFlowControlWindowClient
 	}
 
+	flowteleSignalInterface := config.FlowteleSignalInterface
+	if flowteleSignalInterface == nil {
+		flowteleSignalInterface = createDummyFlowteleSignalInterface()
+	}
+
 	return &Config{
 		Versions:                              versions,
 		HandshakeTimeout:                      handshakeTimeout,
@@ -141,6 +146,7 @@ func populateClientConfig(config *Config) *Config {
 		MaxReceiveStreamFlowControlWindow:     maxReceiveStreamFlowControlWindow,
 		MaxReceiveConnectionFlowControlWindow: maxReceiveConnectionFlowControlWindow,
 		KeepAlive: config.KeepAlive,
+		FlowteleSignalInterface: flowteleSignalInterface,
 	}
 }
 

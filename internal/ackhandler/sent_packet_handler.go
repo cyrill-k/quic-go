@@ -69,6 +69,25 @@ type sentPacketHandler struct {
 	alarm time.Time
 }
 
+// NewFlowteleSentPacketHandler creates a new sentPacketHandler using flowtele cubic
+func NewFlowteleSentPacketHandler(rttStats *congestion.RTTStats, flowteleSignalInterface *congestion.FlowteleSignalInterface) SentPacketHandler {
+	congestion := congestion.NewFlowteleCubicSender(
+		congestion.DefaultClock{},
+		rttStats,
+		false, /* don't use reno since chromium doesn't (why?) */
+		protocol.InitialCongestionWindow,
+		protocol.DefaultMaxCongestionWindow,
+		flowteleSignalInterface,
+	)
+
+	return &sentPacketHandler{
+		packetHistory:      NewPacketList(),
+		stopWaitingManager: stopWaitingManager{},
+		rttStats:           rttStats,
+		congestion:         congestion,
+	}
+}
+
 // NewSentPacketHandler creates a new sentPacketHandler
 func NewSentPacketHandler(rttStats *congestion.RTTStats) SentPacketHandler {
 	congestion := congestion.NewCubicSender(
@@ -85,6 +104,14 @@ func NewSentPacketHandler(rttStats *congestion.RTTStats) SentPacketHandler {
 		rttStats:           rttStats,
 		congestion:         congestion,
 	}
+}
+
+func (s *sentPacketHandler) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
+	return s.congestion.(congestion.FlowteleSendAlgorithmWithDebugInfo).ApplyControl(beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
+}
+
+func (s *sentPacketHandler) SetFixedRate(rateInBitsPerSecond congestion.Bandwidth) {
+	s.congestion.(congestion.FlowteleSendAlgorithmWithDebugInfo).SetFixedRate(rateInBitsPerSecond)
 }
 
 func (h *sentPacketHandler) lowestUnacked() protocol.PacketNumber {

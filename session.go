@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"fmt"
 
 	"github.com/lucas-clemente/quic-go/internal/ackhandler"
 	"github.com/lucas-clemente/quic-go/internal/congestion"
@@ -18,6 +19,14 @@ import (
 	"github.com/lucas-clemente/quic-go/internal/wire"
 	"github.com/lucas-clemente/quic-go/qerr"
 )
+
+func CreateFlowteleSignalInterface(newSrttMeasurement func(t time.Time, srtt time.Duration), packetsLost func(t time.Time, newSlowStartThreshold uint64), packetsAcked func(t time.Time, congestionWindow uint64, packetsInFlight uint64)) *congestion.FlowteleSignalInterface {
+	return &congestion.FlowteleSignalInterface{NewSrttMeasurement: newSrttMeasurement, PacketsLost: packetsLost, PacketsAcked: packetsAcked}
+}
+
+func createDummyFlowteleSignalInterface() *congestion.FlowteleSignalInterface {
+	return &congestion.FlowteleSignalInterface{NewSrttMeasurement: func(t time.Time, srtt time.Duration) {}, PacketsLost: func(t time.Time, newSlowStartThreshold uint64) {}, PacketsAcked: func(t time.Time, congestionWindow uint64, packetsInFlight uint64) {}}
+}
 
 type unpacker interface {
 	Unpack(headerBinary []byte, hdr *wire.Header, data []byte) (*unpackedPacket, error)
@@ -298,8 +307,18 @@ var newTLSClientSession = func(
 	return s, s.postSetup(initialPacketNumber)
 }
 
+func (s *session) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
+	return false
+}
+
+func (s *session) SetFixedRate(rateInBitsPerSecond uint64) {
+	fmt.Printf("SESSION: set fixed rate %f\n", float64(rateInBitsPerSecond)/1000000)
+	s.sentPacketHandler.SetFixedRate(congestion.Bandwidth(rateInBitsPerSecond))
+}
+
 func (s *session) preSetup() {
-	s.rttStats = &congestion.RTTStats{}
+	fmt.Printf("s.config.FlowteleSignalinterface = %+v\n", s.config.FlowteleSignalInterface)
+	s.rttStats = &congestion.RTTStats{FlowteleSignalInterface: s.config.FlowteleSignalInterface}
 	s.connFlowController = flowcontrol.NewConnectionFlowController(
 		protocol.ReceiveConnectionFlowControlWindow,
 		protocol.ByteCount(s.config.MaxReceiveConnectionFlowControlWindow),
@@ -321,7 +340,9 @@ func (s *session) postSetup(initialPacketNumber protocol.PacketNumber) error {
 	s.lastNetworkActivityTime = now
 	s.sessionCreationTime = now
 
-	s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats)
+	fmt.Printf("creating SentPacketHandler, config = %+v\n", s.config)
+	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats)
+	s.sentPacketHandler = ackhandler.NewFlowteleSentPacketHandler(s.rttStats, s.config.FlowteleSignalInterface)
 	s.receivedPacketHandler = ackhandler.NewReceivedPacketHandler(s.version)
 
 	if s.version.UsesTLS() {

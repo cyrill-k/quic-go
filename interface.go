@@ -8,6 +8,7 @@ import (
 
 	"github.com/lucas-clemente/quic-go/internal/handshake"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
+	"github.com/lucas-clemente/quic-go/internal/congestion"
 )
 
 // The StreamID is the ID of a QUIC stream.
@@ -134,6 +135,10 @@ type Session interface {
 	// ConnectionState returns basic details about the QUIC connection.
 	// Warning: This API should not be considered stable and might change soon.
 	ConnectionState() ConnectionState
+
+	ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool
+
+	SetFixedRate(rateInBytePerSecond uint64)
 }
 
 // Config contains all configuration data needed for a QUIC server or client.
@@ -168,6 +173,8 @@ type Config struct {
 	MaxReceiveConnectionFlowControlWindow uint64
 	// KeepAlive defines whether this peer will periodically send PING frames to keep the connection alive.
 	KeepAlive bool
+
+	FlowteleSignalInterface *congestion.FlowteleSignalInterface
 }
 
 // A Listener for incoming QUIC connections
