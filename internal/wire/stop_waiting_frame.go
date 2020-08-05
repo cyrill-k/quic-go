@@ -51,13 +51,13 @@ func (f *StopWaitingFrame) Write(b *bytes.Buffer, v protocol.VersionNumber) erro
 	return nil
 }
 
-// MinLength of a written frame
-func (f *StopWaitingFrame) MinLength(_ protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *StopWaitingFrame) Length(_ protocol.VersionNumber) protocol.ByteCount {
 	return 1 + protocol.ByteCount(f.PacketNumberLen)
 }
 
-// ParseStopWaitingFrame parses a StopWaiting frame
-func ParseStopWaitingFrame(r *bytes.Reader, packetNumber protocol.PacketNumber, packetNumberLen protocol.PacketNumberLen, _ protocol.VersionNumber) (*StopWaitingFrame, error) {
+// parseStopWaitingFrame parses a StopWaiting frame
+func parseStopWaitingFrame(r *bytes.Reader, packetNumber protocol.PacketNumber, packetNumberLen protocol.PacketNumberLen, _ protocol.VersionNumber) (*StopWaitingFrame, error) {
 	frame := &StopWaitingFrame{}
 
 	// read the TypeByte

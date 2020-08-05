@@ -3,23 +3,21 @@ package ackhandler
 import (
 	"time"
 
+	"github.com/lucas-clemente/quic-go/internal/congestion"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/wire"
-	"github.com/lucas-clemente/quic-go/internal/congestion"
 )
 
 // SentPacketHandler handles ACKs received for outgoing packets
 type SentPacketHandler interface {
 	// SentPacket may modify the packet
-	SentPacket(packet *Packet) error
+	SentPacket(packet *Packet)
+	SentPacketsAsRetransmission(packets []*Packet, retransmissionOf protocol.PacketNumber)
 	ReceivedAck(ackFrame *wire.AckFrame, withPacketNumber protocol.PacketNumber, encLevel protocol.EncryptionLevel, recvTime time.Time) error
 	SetHandshakeComplete()
 
-	// SendingAllowed says if a packet can be sent.
-	// Sending packets might not be possible because:
-	// * we're congestion limited
-	// * we're tracking the maximum number of sent packets
-	SendingAllowed() bool
+	// The SendMode determines if and what kind of packets can be sent.
+	SendMode() SendMode
 	// TimeUntilSend is the time when the next packet should be sent.
 	// It is used for pacing packets.
 	TimeUntilSend() time.Time
@@ -32,11 +30,13 @@ type SentPacketHandler interface {
 
 	GetStopWaitingFrame(force bool) *wire.StopWaitingFrame
 	GetLowestPacketNotConfirmedAcked() protocol.PacketNumber
-	DequeuePacketForRetransmission() (packet *Packet)
-	GetLeastUnacked() protocol.PacketNumber
+	DequeuePacketForRetransmission() *Packet
+	DequeueProbePacket() (*Packet, error)
+	GetPacketNumberLen(protocol.PacketNumber) protocol.PacketNumberLen
 
 	GetAlarmTimeout() time.Time
-	OnAlarm()
+
+	OnAlarm() error
 
 	congestion.FlowteleCongestionControlModifier
 }

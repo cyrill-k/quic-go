@@ -19,8 +19,8 @@ type StreamFrame struct {
 	Data           []byte
 }
 
-// ParseStreamFrame reads a STREAM frame
-func ParseStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*StreamFrame, error) {
+// parseStreamFrame reads a STREAM frame
+func parseStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*StreamFrame, error) {
 	if !version.UsesIETFFrameFormat() {
 		return parseLegacyStreamFrame(r, version)
 	}
@@ -56,7 +56,7 @@ func ParseStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*StreamF
 		if err != nil {
 			return nil, err
 		}
-		// shortcut to prevent the unneccessary allocation of dataLen bytes
+		// shortcut to prevent the unnecessary allocation of dataLen bytes
 		// if the dataLen is larger than the remaining length of the packet
 		// reading the packet contents would result in EOF when attempting to READ
 		if dataLen > uint64(r.Len()) {
@@ -75,9 +75,6 @@ func ParseStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*StreamF
 	}
 	if frame.Offset+frame.DataLen() > protocol.MaxByteCount {
 		return nil, qerr.Error(qerr.InvalidStreamData, "data overflows maximum offset")
-	}
-	if !frame.FinBit && frame.DataLen() == 0 {
-		return nil, qerr.EmptyStreamFrameNoFin
 	}
 	return frame, nil
 }
@@ -115,11 +112,10 @@ func (f *StreamFrame) Write(b *bytes.Buffer, version protocol.VersionNumber) err
 	return nil
 }
 
-// MinLength returns the length of the header of a StreamFrame
-// the total length of the frame is frame.MinLength() + frame.DataLen()
-func (f *StreamFrame) MinLength(version protocol.VersionNumber) protocol.ByteCount {
+// Length returns the total length of the STREAM frame
+func (f *StreamFrame) Length(version protocol.VersionNumber) protocol.ByteCount {
 	if !version.UsesIETFFrameFormat() {
-		return f.minLengthLegacy(version)
+		return f.lengthLegacy(version)
 	}
 	length := 1 + utils.VarIntLen(uint64(f.StreamID))
 	if f.Offset != 0 {
@@ -128,5 +124,56 @@ func (f *StreamFrame) MinLength(version protocol.VersionNumber) protocol.ByteCou
 	if f.DataLenPresent {
 		length += utils.VarIntLen(uint64(f.DataLen()))
 	}
-	return length
+	return length + f.DataLen()
+}
+
+// MaxDataLen returns the maximum data length
+// If 0 is returned, writing will fail (a STREAM frame must contain at least 1 byte of data).
+func (f *StreamFrame) MaxDataLen(maxSize protocol.ByteCount, version protocol.VersionNumber) protocol.ByteCount {
+	if !version.UsesIETFFrameFormat() {
+		return f.maxDataLenLegacy(maxSize, version)
+	}
+
+	headerLen := 1 + utils.VarIntLen(uint64(f.StreamID))
+	if f.Offset != 0 {
+		headerLen += utils.VarIntLen(uint64(f.Offset))
+	}
+	if f.DataLenPresent {
+		// pretend that the data size will be 1 bytes
+		// if it turns out that varint encoding the length will consume 2 bytes, we need to adjust the data length afterwards
+		headerLen++
+	}
+	if headerLen > maxSize {
+		return 0
+	}
+	maxDataLen := maxSize - headerLen
+	if f.DataLenPresent && utils.VarIntLen(uint64(maxDataLen)) != 1 {
+		maxDataLen--
+	}
+	return maxDataLen
+}
+
+// MaybeSplitOffFrame splits a frame such that it is not bigger than n bytes.
+// If n >= len(frame), nil is returned and nothing is modified.
+func (f *StreamFrame) MaybeSplitOffFrame(maxSize protocol.ByteCount, version protocol.VersionNumber) (*StreamFrame, error) {
+	if maxSize >= f.Length(version) {
+		return nil, nil
+	}
+
+	n := f.MaxDataLen(maxSize, version)
+	if n == 0 {
+		return nil, errors.New("too small")
+	}
+	newFrame := &StreamFrame{
+		FinBit:         false,
+		StreamID:       f.StreamID,
+		Offset:         f.Offset,
+		Data:           f.Data[:n],
+		DataLenPresent: f.DataLenPresent,
+	}
+
+	f.Data = f.Data[n:]
+	f.Offset += n
+
+	return newFrame, nil
 }

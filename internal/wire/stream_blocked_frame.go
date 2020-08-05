@@ -13,8 +13,8 @@ type StreamBlockedFrame struct {
 	Offset   protocol.ByteCount
 }
 
-// ParseStreamBlockedFrame parses a STREAM_BLOCKED frame
-func ParseStreamBlockedFrame(r *bytes.Reader, _ protocol.VersionNumber) (*StreamBlockedFrame, error) {
+// parseStreamBlockedFrame parses a STREAM_BLOCKED frame
+func parseStreamBlockedFrame(r *bytes.Reader, _ protocol.VersionNumber) (*StreamBlockedFrame, error) {
 	if _, err := r.ReadByte(); err != nil { // read the TypeByte
 		return nil, err
 	}
@@ -43,8 +43,8 @@ func (f *StreamBlockedFrame) Write(b *bytes.Buffer, version protocol.VersionNumb
 	return nil
 }
 
-// MinLength of a written frame
-func (f *StreamBlockedFrame) MinLength(version protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *StreamBlockedFrame) Length(version protocol.VersionNumber) protocol.ByteCount {
 	if !version.UsesIETFFrameFormat() {
 		return 1 + 4
 	}

@@ -19,6 +19,7 @@ import (
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/testdata"
+	"github.com/lucas-clemente/quic-go/internal/utils"
 	"github.com/lucas-clemente/quic-go/qerr"
 
 	. "github.com/onsi/ginkgo"
@@ -60,14 +61,17 @@ func (s *mockSession) OpenStreamSync() (quic.Stream, error) {
 	}
 	return s.OpenStream()
 }
-func (s *mockSession) Close(e error) error {
-	s.closedWithError = e
+func (s *mockSession) Close() error {
 	s.ctxCancel()
 	if !s.closed {
 		close(s.blockOpenStreamChan)
 	}
 	s.closed = true
 	return nil
+}
+func (s *mockSession) CloseWithError(_ quic.ErrorCode, e error) error {
+	s.closedWithError = e
+	return s.Close()
 }
 func (s *mockSession) LocalAddr() net.Addr {
 	panic("not implemented")
@@ -78,7 +82,10 @@ func (s *mockSession) RemoteAddr() net.Addr {
 func (s *mockSession) Context() context.Context {
 	return s.ctx
 }
-func (s *mockSession) ConnectionState() quic.ConnectionState { panic("not implemented") }
+func (s *mockSession) ConnectionState() quic.ConnectionState        { panic("not implemented") }
+func (s *mockSession) AcceptUniStream() (quic.ReceiveStream, error) { panic("not implemented") }
+func (s *mockSession) OpenUniStream() (quic.SendStream, error)      { panic("not implemented") }
+func (s *mockSession) OpenUniStreamSync() (quic.SendStream, error)  { panic("not implemented") }
 
 var _ = Describe("H2 server", func() {
 	var (
@@ -93,6 +100,7 @@ var _ = Describe("H2 server", func() {
 			Server: &http.Server{
 				TLSConfig: testdata.GetTLSConfig(),
 			},
+			logger: utils.DefaultLogger,
 		}
 		dataStream = newMockStream(0)
 		close(dataStream.unblockRead)
@@ -254,6 +262,24 @@ var _ = Describe("H2 server", func() {
 			Expect(dataStream.reset).To(BeFalse())
 		})
 
+		It("ignores PRIORITY frames", func() {
+			handlerCalled := make(chan struct{})
+			s.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(handlerCalled)
+			})
+			buf := &bytes.Buffer{}
+			framer := http2.NewFramer(buf, nil)
+			err := framer.WritePriority(10, http2.PriorityParam{Weight: 42})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(buf.Bytes()).ToNot(BeEmpty())
+			headerStream.dataToRead.Write(buf.Bytes())
+			err = s.handleRequest(session, headerStream, &sync.Mutex{}, hpackDecoder, h2framer)
+			Expect(err).ToNot(HaveOccurred())
+			Consistently(handlerCalled).ShouldNot(BeClosed())
+			Expect(dataStream.reset).To(BeFalse())
+			Expect(dataStream.closed).To(BeFalse())
+		})
+
 		It("errors when non-header frames are received", func() {
 			headerStream.dataToRead.Write([]byte{
 				0x0, 0x0, 0x06, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5,
@@ -284,7 +310,6 @@ var _ = Describe("H2 server", func() {
 			Expect(dataStream.remoteClosed).To(BeTrue())
 			Expect(dataStream.reset).To(BeFalse())
 		})
-
 	})
 
 	It("handles the header stream", func() {

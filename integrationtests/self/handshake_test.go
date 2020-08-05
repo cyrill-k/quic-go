@@ -1,4 +1,4 @@
-package self
+package self_test
 
 import (
 	"crypto/tls"
@@ -11,6 +11,10 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
+
+type versioner interface {
+	GetVersion() protocol.VersionNumber
+}
 
 var _ = Describe("Handshake tests", func() {
 	var (
@@ -51,30 +55,38 @@ var _ = Describe("Handshake tests", func() {
 	}
 
 	Context("Version Negotiation", func() {
+		var supportedVersions []protocol.VersionNumber
+
+		BeforeEach(func() {
+			supportedVersions = protocol.SupportedVersions
+			protocol.SupportedVersions = append(protocol.SupportedVersions, []protocol.VersionNumber{7, 8, 9, 10}...)
+		})
+
+		AfterEach(func() {
+			protocol.SupportedVersions = supportedVersions
+		})
+
 		It("when the server supports more versions than the client", func() {
-			if len(protocol.SupportedVersions) == 1 {
-				Skip("Test requires at least 2 supported versions.")
-			}
 			// the server doesn't support the highest supported version, which is the first one the client will try
 			// but it supports a bunch of versions that the client doesn't speak
 			serverConfig.Versions = []protocol.VersionNumber{protocol.SupportedVersions[1], 7, 8, 9}
 			runServer()
-			_, err := quic.DialAddr(server.Addr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
+			sess, err := quic.DialAddr(server.Addr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
 			Expect(err).ToNot(HaveOccurred())
+			Expect(sess.(versioner).GetVersion()).To(Equal(protocol.SupportedVersions[1]))
 		})
 
 		It("when the client supports more versions than the server supports", func() {
-			if len(protocol.SupportedVersions) == 1 {
-				Skip("Test requires at least 2 supported versions.")
-			}
 			// the server doesn't support the highest supported version, which is the first one the client will try
 			// but it supports a bunch of versions that the client doesn't speak
+			serverConfig.Versions = supportedVersions
 			runServer()
 			conf := &quic.Config{
 				Versions: []protocol.VersionNumber{7, 8, 9, protocol.SupportedVersions[1], 10},
 			}
-			_, err := quic.DialAddr(server.Addr().String(), &tls.Config{InsecureSkipVerify: true}, conf)
+			sess, err := quic.DialAddr(server.Addr().String(), &tls.Config{InsecureSkipVerify: true}, conf)
 			Expect(err).ToNot(HaveOccurred())
+			Expect(sess.(versioner).GetVersion()).To(Equal(protocol.SupportedVersions[1]))
 		})
 	})
 

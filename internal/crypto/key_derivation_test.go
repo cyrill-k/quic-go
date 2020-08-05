@@ -19,11 +19,13 @@ var _ TLSExporter = &mockTLSExporter{}
 
 func (c *mockTLSExporter) Handshake() mint.Alert { panic("not implemented") }
 
-func (c *mockTLSExporter) GetCipherSuite() mint.CipherSuiteParams {
-	return mint.CipherSuiteParams{
-		Hash:   c.hash,
-		KeyLen: 32,
-		IvLen:  12,
+func (c *mockTLSExporter) ConnectionState() mint.ConnectionState {
+	return mint.ConnectionState{
+		CipherSuite: mint.CipherSuiteParams{
+			Hash:   c.hash,
+			KeyLen: 32,
+			IvLen:  12,
+		},
 	}
 }
 
@@ -44,16 +46,6 @@ var _ = Describe("Key Derivation", func() {
 		data, err := serverAEAD.Open(nil, ciphertext, 0, []byte("aad"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(data).To(Equal([]byte("foobar")))
-	})
-
-	It("fails when different hash functions are used", func() {
-		clientAEAD, err := DeriveAESKeys(&mockTLSExporter{hash: crypto.SHA256}, protocol.PerspectiveClient)
-		Expect(err).ToNot(HaveOccurred())
-		serverAEAD, err := DeriveAESKeys(&mockTLSExporter{hash: crypto.SHA512}, protocol.PerspectiveServer)
-		Expect(err).ToNot(HaveOccurred())
-		ciphertext := clientAEAD.Seal(nil, []byte("foobar"), 0, []byte("aad"))
-		_, err = serverAEAD.Open(nil, ciphertext, 0, []byte("aad"))
-		Expect(err).To(MatchError("cipher: message authentication failed"))
 	})
 
 	It("fails when computing the exporter fails", func() {

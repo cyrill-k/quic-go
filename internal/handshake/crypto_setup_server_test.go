@@ -8,8 +8,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/bifurcation/mint"
-
 	"github.com/lucas-clemente/quic-go/internal/crypto"
 	"github.com/lucas-clemente/quic-go/internal/mocks/crypto"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
@@ -96,11 +94,10 @@ func (s *mockStream) close() {
 }
 
 type mockCookieProtector struct {
-	data      []byte
 	decodeErr error
 }
 
-var _ mint.CookieProtector = &mockCookieProtector{}
+var _ cookieProtector = &mockCookieProtector{}
 
 func (mockCookieProtector) NewToken(sourceAddr []byte) ([]byte, error) {
 	return append([]byte("token "), sourceAddr...), nil
@@ -162,15 +159,17 @@ var _ = Describe("Server Crypto Setup", func() {
 		supportedVersions = []protocol.VersionNumber{version, 98, 99}
 		csInt, err := NewCryptoSetup(
 			stream,
-			protocol.ConnectionID(42),
+			protocol.ConnectionID{1, 2, 3, 4, 5, 6, 7, 8},
 			remoteAddr,
 			version,
+			make([]byte, 32), // div nonce
 			scfg,
 			&TransportParameters{IdleTimeout: protocol.DefaultIdleTimeout},
 			supportedVersions,
 			nil,
 			paramsChan,
 			handshakeEvent,
+			utils.DefaultLogger,
 		)
 		Expect(err).NotTo(HaveOccurred())
 		cs = csInt.(*cryptoSetupServer)
@@ -180,24 +179,9 @@ var _ = Describe("Server Crypto Setup", func() {
 		sourceAddrValid = true
 		cs.acceptSTKCallback = func(_ net.Addr, _ *Cookie) bool { return sourceAddrValid }
 		cs.keyDerivation = mockQuicCryptoKeyDerivation
-		cs.keyExchange = func() crypto.KeyExchange { return &mockKEX{ephermal: true} }
+		cs.keyExchange = func() (crypto.KeyExchange, error) { return &mockKEX{ephermal: true}, nil }
 		cs.nullAEAD = mockcrypto.NewMockAEAD(mockCtrl)
 		cs.cryptoStream = stream
-	})
-
-	Context("diversification nonce", func() {
-		BeforeEach(func() {
-			cs.secureAEAD = mockcrypto.NewMockAEAD(mockCtrl)
-			cs.receivedForwardSecurePacket = false
-
-			Expect(cs.DiversificationNonce()).To(BeEmpty())
-			// Div nonce is created after CHLO
-			cs.handleCHLO("", nil, map[Tag][]byte{TagNONC: nonce32})
-		})
-
-		It("returns diversification nonces", func() {
-			Expect(cs.DiversificationNonce()).To(HaveLen(32))
-		})
 	})
 
 	Context("when responding to client messages", func() {
@@ -222,17 +206,6 @@ var _ = Describe("Server Crypto Setup", func() {
 				TagPUBS: bytes.Repeat([]byte{'e'}, 31),
 				TagVER:  versionTag,
 			}
-		})
-
-		It("doesn't support Chrome's head-of-line blocking experiment", func() {
-			HandshakeMessage{
-				Tag: TagCHLO,
-				Data: map[Tag][]byte{
-					TagFHL2: []byte("foobar"),
-				},
-			}.Write(&stream.dataToRead)
-			err := cs.HandleCryptoStream()
-			Expect(err).To(MatchError(ErrHOLExperiment))
 		})
 
 		It("doesn't support Chrome's no STOP_WAITING experiment", func() {
@@ -318,12 +291,11 @@ var _ = Describe("Server Crypto Setup", func() {
 			Expect(message.Data).To(HaveKeyWithValue(TagPUBS, []byte("ephermal pub")))
 			Expect(message.Data).To(HaveKey(TagSNO))
 			Expect(message.Data).To(HaveKey(TagVER))
-			// the supported versions should include one reserved version number
-			Expect(message.Data[TagVER]).To(HaveLen(4*len(supportedVersions) + 4))
+			Expect(message.Data[TagVER]).To(HaveLen(4 * len(supportedVersions)))
 			for _, v := range supportedVersions {
 				b := &bytes.Buffer{}
 				utils.BigEndian.WriteUint32(b, uint32(v))
-				Expect(message.Data[TagVER]).To(ContainSubstring(string(b.Bytes())))
+				Expect(message.Data[TagVER]).To(ContainSubstring(b.String()))
 			}
 			Expect(checkedSecure).To(BeTrue())
 			Expect(checkedForwardSecure).To(BeTrue())

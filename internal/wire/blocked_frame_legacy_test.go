@@ -12,7 +12,7 @@ var _ = Describe("legacy BLOCKED Frame", func() {
 	Context("when parsing", func() {
 		It("accepts sample frame for a stream", func() {
 			b := bytes.NewReader([]byte{0x5, 0xde, 0xad, 0xbe, 0xef})
-			f, err := ParseBlockedFrameLegacy(b, versionBigEndian)
+			f, err := parseBlockedFrameLegacy(b, versionBigEndian)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(f).To(BeAssignableToTypeOf(&StreamBlockedFrame{}))
 			frame := f.(*StreamBlockedFrame)
@@ -21,7 +21,7 @@ var _ = Describe("legacy BLOCKED Frame", func() {
 
 		It("accepts sample frame for the connection", func() {
 			b := bytes.NewReader([]byte{0x5, 0x0, 0x0, 0x0, 0x0})
-			f, err := ParseBlockedFrameLegacy(b, versionBigEndian)
+			f, err := parseBlockedFrameLegacy(b, versionBigEndian)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(f).To(BeAssignableToTypeOf(&BlockedFrame{}))
 		})
@@ -29,10 +29,10 @@ var _ = Describe("legacy BLOCKED Frame", func() {
 
 	It("errors on EOFs", func() {
 		data := []byte{0x5, 0xef, 0xbe, 0xad, 0xde}
-		_, err := ParseBlockedFrameLegacy(bytes.NewReader(data), protocol.VersionWhatever)
+		_, err := parseBlockedFrameLegacy(bytes.NewReader(data), protocol.VersionWhatever)
 		Expect(err).NotTo(HaveOccurred())
 		for i := range data {
-			_, err := ParseBlockedFrameLegacy(bytes.NewReader(data[0:i]), protocol.VersionWhatever)
+			_, err := parseBlockedFrameLegacy(bytes.NewReader(data[0:i]), protocol.VersionWhatever)
 			Expect(err).To(HaveOccurred())
 		}
 	})
@@ -47,7 +47,7 @@ var _ = Describe("legacy BLOCKED Frame", func() {
 
 		It("has the correct min length for a BLOCKED frame for a stream", func() {
 			frame := StreamBlockedFrame{StreamID: 3}
-			Expect(frame.MinLength(versionBigEndian)).To(Equal(protocol.ByteCount(5)))
+			Expect(frame.Length(versionBigEndian)).To(Equal(protocol.ByteCount(5)))
 		})
 
 		It("writes a BLOCKED frame for the connection", func() {
@@ -59,7 +59,7 @@ var _ = Describe("legacy BLOCKED Frame", func() {
 
 		It("has the correct min length for a BLOCKED frame for the connection", func() {
 			frame := BlockedFrame{}
-			Expect(frame.MinLength(versionBigEndian)).To(Equal(protocol.ByteCount(5)))
+			Expect(frame.Length(versionBigEndian)).To(Equal(protocol.ByteCount(5)))
 		})
 	})
 })

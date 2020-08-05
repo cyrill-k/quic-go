@@ -16,8 +16,8 @@ type RstStreamFrame struct {
 	ByteOffset protocol.ByteCount
 }
 
-// ParseRstStreamFrame parses a RST_STREAM frame
-func ParseRstStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*RstStreamFrame, error) {
+// parseRstStreamFrame parses a RST_STREAM frame
+func parseRstStreamFrame(r *bytes.Reader, version protocol.VersionNumber) (*RstStreamFrame, error) {
 	if _, err := r.ReadByte(); err != nil { // read the TypeByte
 		return nil, err
 	}
@@ -80,8 +80,8 @@ func (f *RstStreamFrame) Write(b *bytes.Buffer, version protocol.VersionNumber) 
 	return nil
 }
 
-// MinLength of a written frame
-func (f *RstStreamFrame) MinLength(version protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *RstStreamFrame) Length(version protocol.VersionNumber) protocol.ByteCount {
 	if version.UsesIETFFrameFormat() {
 		return 1 + utils.VarIntLen(uint64(f.StreamID)) + 2 + utils.VarIntLen(uint64(f.ByteOffset))
 	}

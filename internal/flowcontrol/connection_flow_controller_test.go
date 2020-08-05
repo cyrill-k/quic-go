@@ -5,12 +5,16 @@ import (
 
 	"github.com/lucas-clemente/quic-go/internal/congestion"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
+	"github.com/lucas-clemente/quic-go/internal/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("Connection Flow controller", func() {
-	var controller *connectionFlowController
+	var (
+		controller         *connectionFlowController
+		queuedWindowUpdate bool
+	)
 
 	// update the congestion such that it returns a given value for the smoothed RTT
 	setRtt := func(t time.Duration) {
@@ -21,6 +25,8 @@ var _ = Describe("Connection Flow controller", func() {
 	BeforeEach(func() {
 		controller = &connectionFlowController{}
 		controller.rttStats = &congestion.RTTStats{}
+		controller.logger = utils.DefaultLogger
+		controller.queueWindowUpdate = func() { queuedWindowUpdate = true }
 	})
 
 	Context("Constructor", func() {
@@ -30,7 +36,7 @@ var _ = Describe("Connection Flow controller", func() {
 			receiveWindow := protocol.ByteCount(2000)
 			maxReceiveWindow := protocol.ByteCount(3000)
 
-			fc := NewConnectionFlowController(receiveWindow, maxReceiveWindow, rttStats).(*connectionFlowController)
+			fc := NewConnectionFlowController(receiveWindow, maxReceiveWindow, nil, rttStats, utils.DefaultLogger).(*connectionFlowController)
 			Expect(fc.receiveWindow).To(Equal(receiveWindow))
 			Expect(fc.maxReceiveWindowSize).To(Equal(maxReceiveWindow))
 		})
@@ -49,6 +55,18 @@ var _ = Describe("Connection Flow controller", func() {
 				controller.receiveWindowSize = 60
 				controller.maxReceiveWindowSize = 1000
 				controller.bytesRead = 100 - 60
+			})
+
+			It("queues window updates", func() {
+				controller.MaybeQueueWindowUpdate()
+				Expect(queuedWindowUpdate).To(BeFalse())
+				controller.AddBytesRead(30)
+				controller.MaybeQueueWindowUpdate()
+				Expect(queuedWindowUpdate).To(BeTrue())
+				Expect(controller.GetWindowUpdate()).ToNot(BeZero())
+				queuedWindowUpdate = false
+				controller.MaybeQueueWindowUpdate()
+				Expect(queuedWindowUpdate).To(BeFalse())
 			})
 
 			It("gets a window update", func() {
@@ -77,31 +95,6 @@ var _ = Describe("Connection Flow controller", func() {
 		})
 	})
 
-	Context("send flow control", func() {
-		It("says when it's blocked", func() {
-			controller.UpdateSendWindow(100)
-			Expect(controller.IsNewlyBlocked()).To(BeFalse())
-			controller.AddBytesSent(100)
-			blocked, offset := controller.IsNewlyBlocked()
-			Expect(blocked).To(BeTrue())
-			Expect(offset).To(Equal(protocol.ByteCount(100)))
-		})
-
-		It("doesn't say that it's newly blocked multiple times for the same offset", func() {
-			controller.UpdateSendWindow(100)
-			controller.AddBytesSent(100)
-			newlyBlocked, offset := controller.IsNewlyBlocked()
-			Expect(newlyBlocked).To(BeTrue())
-			Expect(offset).To(Equal(protocol.ByteCount(100)))
-			newlyBlocked, _ = controller.IsNewlyBlocked()
-			Expect(newlyBlocked).To(BeFalse())
-			controller.UpdateSendWindow(150)
-			controller.AddBytesSent(150)
-			newlyBlocked, offset = controller.IsNewlyBlocked()
-			Expect(newlyBlocked).To(BeTrue())
-		})
-	})
-
 	Context("setting the minimum window size", func() {
 		var (
 			oldWindowSize     protocol.ByteCount
@@ -110,7 +103,6 @@ var _ = Describe("Connection Flow controller", func() {
 		)
 
 		BeforeEach(func() {
-			controller.bytesRead = receiveWindowSize - receiveWindowSize
 			controller.receiveWindow = receiveWindow
 			controller.receiveWindowSize = receiveWindowSize
 			oldWindowSize = controller.receiveWindowSize

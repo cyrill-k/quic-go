@@ -12,8 +12,8 @@ type MaxStreamIDFrame struct {
 	StreamID protocol.StreamID
 }
 
-// ParseMaxStreamIDFrame parses a MAX_STREAM_ID frame
-func ParseMaxStreamIDFrame(r *bytes.Reader, _ protocol.VersionNumber) (*MaxStreamIDFrame, error) {
+// parseMaxStreamIDFrame parses a MAX_STREAM_ID frame
+func parseMaxStreamIDFrame(r *bytes.Reader, _ protocol.VersionNumber) (*MaxStreamIDFrame, error) {
 	// read the Type byte
 	if _, err := r.ReadByte(); err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (f *MaxStreamIDFrame) Write(b *bytes.Buffer, _ protocol.VersionNumber) erro
 	return nil
 }
 
-// MinLength of a written frame
-func (f *MaxStreamIDFrame) MinLength(protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *MaxStreamIDFrame) Length(protocol.VersionNumber) protocol.ByteCount {
 	return 1 + utils.VarIntLen(uint64(f.StreamID))
 }

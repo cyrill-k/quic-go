@@ -13,7 +13,7 @@ import (
 var _ = Describe("public reset", func() {
 	Context("writing", func() {
 		It("writes public reset packets", func() {
-			Expect(WritePublicReset(0xdeadbeef, 0x8badf00d, 0xdecafbad)).To(Equal([]byte{
+			Expect(WritePublicReset(protocol.ConnectionID{0, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef}, 0x8badf00d, 0xdecafbad)).To(Equal([]byte{
 				0x0a,
 				0x0, 0x0, 0x0, 0x0, 0xde, 0xad, 0xbe, 0xef,
 				'P', 'R', 'S', 'T',
@@ -36,7 +36,7 @@ var _ = Describe("public reset", func() {
 		})
 
 		It("parses a public reset", func() {
-			packet := WritePublicReset(0xdeadbeef, 0x8badf00d, 0xdecafbad)
+			packet := WritePublicReset(protocol.ConnectionID{1, 2, 3, 4, 5, 6, 7, 8}, 0x8badf00d, 0xdecafbad)
 			pr, err := ParsePublicReset(bytes.NewReader(packet[9:])) // 1 byte Public Flag, 8 bytes connection ID
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pr.Nonce).To(Equal(uint64(0xdecafbad)))
@@ -56,7 +56,7 @@ var _ = Describe("public reset", func() {
 
 		It("rejects packets missing the nonce", func() {
 			data := map[handshake.Tag][]byte{
-				handshake.TagRSEQ: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
+				handshake.TagRSEQ: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
 			}
 			handshake.HandshakeMessage{Tag: handshake.TagPRST, Data: data}.Write(b)
 			_, err := ParsePublicReset(bytes.NewReader(b.Bytes()))
@@ -65,8 +65,8 @@ var _ = Describe("public reset", func() {
 
 		It("rejects packets with a wrong length nonce", func() {
 			data := map[handshake.Tag][]byte{
-				handshake.TagRSEQ: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
-				handshake.TagRNON: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13},
+				handshake.TagRSEQ: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
+				handshake.TagRNON: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13},
 			}
 			handshake.HandshakeMessage{Tag: handshake.TagPRST, Data: data}.Write(b)
 			_, err := ParsePublicReset(bytes.NewReader(b.Bytes()))
@@ -75,7 +75,7 @@ var _ = Describe("public reset", func() {
 
 		It("accepts packets missing the rejected packet number", func() {
 			data := map[handshake.Tag][]byte{
-				handshake.TagRNON: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
+				handshake.TagRNON: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
 			}
 			handshake.HandshakeMessage{Tag: handshake.TagPRST, Data: data}.Write(b)
 			pr, err := ParsePublicReset(bytes.NewReader(b.Bytes()))
@@ -85,8 +85,8 @@ var _ = Describe("public reset", func() {
 
 		It("rejects packets with a wrong length rejected packet number", func() {
 			data := map[handshake.Tag][]byte{
-				handshake.TagRSEQ: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13},
-				handshake.TagRNON: []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
+				handshake.TagRSEQ: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13},
+				handshake.TagRNON: {0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0x13, 0x37},
 			}
 			handshake.HandshakeMessage{Tag: handshake.TagPRST, Data: data}.Write(b)
 			_, err := ParsePublicReset(bytes.NewReader(b.Bytes()))

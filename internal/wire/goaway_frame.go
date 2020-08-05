@@ -16,8 +16,8 @@ type GoawayFrame struct {
 	ReasonPhrase   string
 }
 
-// ParseGoawayFrame parses a GOAWAY frame
-func ParseGoawayFrame(r *bytes.Reader, _ protocol.VersionNumber) (*GoawayFrame, error) {
+// parseGoawayFrame parses a GOAWAY frame
+func parseGoawayFrame(r *bytes.Reader, _ protocol.VersionNumber) (*GoawayFrame, error) {
 	frame := &GoawayFrame{}
 
 	if _, err := r.ReadByte(); err != nil {
@@ -41,7 +41,7 @@ func ParseGoawayFrame(r *bytes.Reader, _ protocol.VersionNumber) (*GoawayFrame, 
 		return nil, err
 	}
 
-	if reasonPhraseLen > uint16(protocol.MaxPacketSize) {
+	if reasonPhraseLen > uint16(protocol.MaxReceivePacketSize) {
 		return nil, qerr.Error(qerr.InvalidGoawayData, "reason phrase too long")
 	}
 
@@ -62,7 +62,7 @@ func (f *GoawayFrame) Write(b *bytes.Buffer, _ protocol.VersionNumber) error {
 	return nil
 }
 
-// MinLength of a written frame
-func (f *GoawayFrame) MinLength(version protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *GoawayFrame) Length(version protocol.VersionNumber) protocol.ByteCount {
 	return protocol.ByteCount(1 + 4 + 4 + 2 + len(f.ReasonPhrase))
 }

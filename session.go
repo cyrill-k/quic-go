@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -9,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bifurcation/mint"
 	"github.com/lucas-clemente/quic-go/internal/ackhandler"
 	"github.com/lucas-clemente/quic-go/internal/congestion"
-	"github.com/lucas-clemente/quic-go/internal/crypto"
 	"github.com/lucas-clemente/quic-go/internal/flowcontrol"
 	"github.com/lucas-clemente/quic-go/internal/handshake"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
@@ -38,15 +39,27 @@ type streamGetter interface {
 }
 
 type streamManager interface {
-	GetOrOpenStream(protocol.StreamID) (streamI, error)
 	GetOrOpenSendStream(protocol.StreamID) (sendStreamI, error)
 	GetOrOpenReceiveStream(protocol.StreamID) (receiveStreamI, error)
 	OpenStream() (Stream, error)
+	OpenUniStream() (SendStream, error)
 	OpenStreamSync() (Stream, error)
+	OpenUniStreamSync() (SendStream, error)
 	AcceptStream() (Stream, error)
+	AcceptUniStream() (ReceiveStream, error)
 	DeleteStream(protocol.StreamID) error
 	UpdateLimits(*handshake.TransportParameters)
+	HandleMaxStreamIDFrame(*wire.MaxStreamIDFrame) error
 	CloseWithError(error)
+}
+
+type cryptoStreamHandler interface {
+	HandleCryptoStream() error
+	ConnectionState() handshake.ConnectionState
+}
+
+type divNonceSetter interface {
+	SetDiversificationNonce([]byte) error
 }
 
 type receivedPacket struct {
@@ -62,21 +75,26 @@ var (
 )
 
 type closeError struct {
-	err    error
-	remote bool
+	err       error
+	remote    bool
+	sendClose bool
 }
 
 // A Session is a QUIC session
 type session struct {
-	connectionID protocol.ConnectionID
-	perspective  protocol.Perspective
-	version      protocol.VersionNumber
-	config       *Config
+	sessionRunner sessionRunner
+
+	destConnID protocol.ConnectionID
+	srcConnID  protocol.ConnectionID
+
+	perspective protocol.Perspective
+	version     protocol.VersionNumber
+	config      *Config
 
 	conn connection
 
 	streamsMap   streamManager
-	cryptoStream cryptoStreamI
+	cryptoStream cryptoStream
 
 	rttStats *congestion.RTTStats
 
@@ -89,7 +107,7 @@ type session struct {
 	unpacker unpacker
 	packer   *packetPacker
 
-	cryptoSetup handshake.CryptoSetup
+	cryptoStreamHandler cryptoStreamHandler
 
 	receivedPackets  chan *receivedPacket
 	sendingScheduled chan struct{}
@@ -109,14 +127,12 @@ type session struct {
 	paramsChan <-chan handshake.TransportParameters
 	// the handshakeEvent channel is passed to the CryptoSetup.
 	// It receives when it makes sense to try decrypting undecryptable packets.
-	handshakeEvent <-chan struct{}
-	// handshakeChan is returned by handshakeStatus.
-	// It receives any error that might occur during the handshake.
-	// It is closed when the handshake is complete.
-	handshakeChan     chan error
+	handshakeEvent    <-chan struct{}
 	handshakeComplete bool
 
-	lastRcvdPacketNumber protocol.PacketNumber
+	receivedFirstPacket              bool // since packet numbers start at 0, we can't use largestRcvdPacketNumber != 0 for this
+	receivedFirstForwardSecurePacket bool
+	lastRcvdPacketNumber             protocol.PacketNumber
 	// Used to calculate the next packet number from the truncated wire
 	// representation, and sent back in public reset packets
 	largestRcvdPacketNumber protocol.PacketNumber
@@ -132,6 +148,8 @@ type session struct {
 	// keepAlivePingSent stores whether a Ping frame was sent to the peer or not
 	// it is reset as soon as we receive a packet from the peer
 	keepAlivePingSent bool
+
+	logger utils.Logger
 }
 
 var _ Session = &session{}
@@ -140,83 +158,119 @@ var _ streamSender = &session{}
 // newSession makes a new session
 func newSession(
 	conn connection,
+	sessionRunner sessionRunner,
 	v protocol.VersionNumber,
-	connectionID protocol.ConnectionID,
+	destConnID protocol.ConnectionID,
+	srcConnID protocol.ConnectionID,
 	scfg *handshake.ServerConfig,
 	tlsConf *tls.Config,
 	config *Config,
-) (packetHandler, error) {
+	logger utils.Logger,
+) (quicSession, error) {
+	logger.Debugf("Creating new session. Destination Connection ID: %s, Source Connection ID: %s", destConnID, srcConnID)
 	paramsChan := make(chan handshake.TransportParameters)
 	handshakeEvent := make(chan struct{}, 1)
 	s := &session{
 		conn:           conn,
-		connectionID:   connectionID,
+		sessionRunner:  sessionRunner,
+		srcConnID:      srcConnID,
+		destConnID:     destConnID,
 		perspective:    protocol.PerspectiveServer,
 		version:        v,
 		config:         config,
 		handshakeEvent: handshakeEvent,
 		paramsChan:     paramsChan,
+		logger:         logger,
 	}
 	s.preSetup()
 	transportParams := &handshake.TransportParameters{
 		StreamFlowControlWindow:     protocol.ReceiveStreamFlowControlWindow,
 		ConnectionFlowControlWindow: protocol.ReceiveConnectionFlowControlWindow,
-		MaxStreams:                  protocol.MaxIncomingStreams,
+		MaxStreams:                  uint32(s.config.MaxIncomingStreams),
 		IdleTimeout:                 s.config.IdleTimeout,
+	}
+	divNonce := make([]byte, 32)
+	if _, err := rand.Read(divNonce); err != nil {
+		return nil, err
 	}
 	cs, err := newCryptoSetup(
 		s.cryptoStream,
-		s.connectionID,
+		srcConnID,
 		s.conn.RemoteAddr(),
 		s.version,
+		divNonce,
 		scfg,
 		transportParams,
 		s.config.Versions,
 		s.config.AcceptCookie,
 		paramsChan,
 		handshakeEvent,
+		s.logger,
 	)
 	if err != nil {
 		return nil, err
 	}
-	s.cryptoSetup = cs
-	return s, s.postSetup(1)
+	s.cryptoStreamHandler = cs
+	s.unpacker = newPacketUnpackerGQUIC(cs, s.version)
+	s.streamsMap = newStreamsMapLegacy(s.newStream, s.config.MaxIncomingStreams, s.perspective)
+	s.streamFramer = newStreamFramer(s.cryptoStream, s.streamsMap, s.version)
+	s.packer = newPacketPacker(
+		destConnID,
+		srcConnID,
+		1,
+		s.sentPacketHandler.GetPacketNumberLen,
+		s.RemoteAddr(),
+		nil, // no token
+		divNonce,
+		cs,
+		s.streamFramer,
+		s.perspective,
+		s.version,
+	)
+	return s, s.postSetup()
 }
 
 // declare this as a variable, so that we can it mock it in the tests
 var newClientSession = func(
 	conn connection,
+	sessionRunner sessionRunner,
 	hostname string,
 	v protocol.VersionNumber,
-	connectionID protocol.ConnectionID,
+	destConnID protocol.ConnectionID,
+	srcConnID protocol.ConnectionID,
 	tlsConf *tls.Config,
 	config *Config,
 	initialVersion protocol.VersionNumber,
-	negotiatedVersions []protocol.VersionNumber, // needed for validation of the GQUIC version negotiaton
-) (packetHandler, error) {
+	negotiatedVersions []protocol.VersionNumber, // needed for validation of the GQUIC version negotiation
+	logger utils.Logger,
+) (quicSession, error) {
+	logger.Debugf("Creating new session. Destination Connection ID: %s, Source Connection ID: %s", destConnID, srcConnID)
 	paramsChan := make(chan handshake.TransportParameters)
 	handshakeEvent := make(chan struct{}, 1)
 	s := &session{
 		conn:           conn,
-		connectionID:   connectionID,
+		sessionRunner:  sessionRunner,
+		srcConnID:      srcConnID,
+		destConnID:     destConnID,
 		perspective:    protocol.PerspectiveClient,
 		version:        v,
 		config:         config,
 		handshakeEvent: handshakeEvent,
 		paramsChan:     paramsChan,
+		logger:         logger,
 	}
 	s.preSetup()
 	transportParams := &handshake.TransportParameters{
 		StreamFlowControlWindow:     protocol.ReceiveStreamFlowControlWindow,
 		ConnectionFlowControlWindow: protocol.ReceiveConnectionFlowControlWindow,
-		MaxStreams:                  protocol.MaxIncomingStreams,
+		MaxStreams:                  uint32(s.config.MaxIncomingStreams),
 		IdleTimeout:                 s.config.IdleTimeout,
 		OmitConnectionID:            s.config.RequestConnectionIDOmission,
 	}
 	cs, err := newCryptoSetupClient(
 		s.cryptoStream,
 		hostname,
-		s.connectionID,
+		destConnID,
 		s.version,
 		tlsConf,
 		transportParams,
@@ -224,87 +278,148 @@ var newClientSession = func(
 		handshakeEvent,
 		initialVersion,
 		negotiatedVersions,
+		s.logger,
 	)
 	if err != nil {
 		return nil, err
 	}
-	s.cryptoSetup = cs
-	return s, s.postSetup(1)
+	s.cryptoStreamHandler = cs
+	s.unpacker = newPacketUnpackerGQUIC(cs, s.version)
+	s.streamsMap = newStreamsMapLegacy(s.newStream, s.config.MaxIncomingStreams, s.perspective)
+	s.streamFramer = newStreamFramer(s.cryptoStream, s.streamsMap, s.version)
+	s.packer = newPacketPacker(
+		destConnID,
+		srcConnID,
+		1,
+		s.sentPacketHandler.GetPacketNumberLen,
+		s.RemoteAddr(),
+		nil, // no token
+		nil, // no diversification nonce
+		cs,
+		s.streamFramer,
+		s.perspective,
+		s.version,
+	)
+	return s, s.postSetup()
 }
 
 func newTLSServerSession(
 	conn connection,
-	connectionID protocol.ConnectionID,
+	runner sessionRunner,
+	origConnID protocol.ConnectionID,
+	destConnID protocol.ConnectionID,
+	srcConnID protocol.ConnectionID,
 	initialPacketNumber protocol.PacketNumber,
 	config *Config,
-	tls handshake.MintTLS,
-	cryptoStreamConn *handshake.CryptoStreamConn,
-	nullAEAD crypto.AEAD,
+	mintConf *mint.Config,
 	peerParams *handshake.TransportParameters,
+	logger utils.Logger,
 	v protocol.VersionNumber,
-) (packetHandler, error) {
+) (quicSession, error) {
 	handshakeEvent := make(chan struct{}, 1)
 	s := &session{
 		conn:           conn,
+		sessionRunner:  runner,
 		config:         config,
-		connectionID:   connectionID,
+		srcConnID:      srcConnID,
+		destConnID:     destConnID,
 		perspective:    protocol.PerspectiveServer,
 		version:        v,
 		handshakeEvent: handshakeEvent,
+		logger:         logger,
 	}
 	s.preSetup()
-	s.cryptoSetup = handshake.NewCryptoSetupTLSServer(
-		tls,
-		cryptoStreamConn,
-		nullAEAD,
+	cs, err := handshake.NewCryptoSetupTLSServer(
+		s.cryptoStream,
+		origConnID,
+		mintConf,
 		handshakeEvent,
 		v,
 	)
-	if err := s.postSetup(initialPacketNumber); err != nil {
+	if err != nil {
+		return nil, err
+	}
+	s.cryptoStreamHandler = cs
+	s.streamsMap = newStreamsMap(s, s.newFlowController, s.config.MaxIncomingStreams, s.config.MaxIncomingUniStreams, s.perspective, s.version)
+	s.streamFramer = newStreamFramer(s.cryptoStream, s.streamsMap, s.version)
+	s.packer = newPacketPacker(
+		s.destConnID,
+		s.srcConnID,
+		initialPacketNumber,
+		s.sentPacketHandler.GetPacketNumberLen,
+		s.RemoteAddr(),
+		nil, // no token
+		nil, // no diversification nonce
+		cs,
+		s.streamFramer,
+		s.perspective,
+		s.version,
+	)
+	if err := s.postSetup(); err != nil {
 		return nil, err
 	}
 	s.peerParams = peerParams
 	s.processTransportParameters(peerParams)
-	s.unpacker = &packetUnpacker{aead: s.cryptoSetup, version: s.version}
+	s.unpacker = newPacketUnpacker(cs, s.version)
 	return s, nil
 }
 
 // declare this as a variable, such that we can it mock it in the tests
 var newTLSClientSession = func(
 	conn connection,
-	hostname string,
-	v protocol.VersionNumber,
-	connectionID protocol.ConnectionID,
-	config *Config,
-	tls handshake.MintTLS,
+	runner sessionRunner,
+	token []byte,
+	destConnID protocol.ConnectionID,
+	srcConnID protocol.ConnectionID,
+	conf *Config,
+	mintConf *mint.Config,
 	paramsChan <-chan handshake.TransportParameters,
 	initialPacketNumber protocol.PacketNumber,
-) (packetHandler, error) {
+	logger utils.Logger,
+	v protocol.VersionNumber,
+) (quicSession, error) {
 	handshakeEvent := make(chan struct{}, 1)
 	s := &session{
 		conn:           conn,
-		config:         config,
-		connectionID:   connectionID,
+		sessionRunner:  runner,
+		config:         conf,
+		srcConnID:      srcConnID,
+		destConnID:     destConnID,
 		perspective:    protocol.PerspectiveClient,
 		version:        v,
 		handshakeEvent: handshakeEvent,
 		paramsChan:     paramsChan,
+		logger:         logger,
 	}
 	s.preSetup()
-	tls.SetCryptoStream(s.cryptoStream)
 	cs, err := handshake.NewCryptoSetupTLSClient(
 		s.cryptoStream,
-		s.connectionID,
-		hostname,
+		s.destConnID,
+		mintConf,
 		handshakeEvent,
-		tls,
 		v,
 	)
 	if err != nil {
 		return nil, err
 	}
-	s.cryptoSetup = cs
-	return s, s.postSetup(initialPacketNumber)
+	s.cryptoStreamHandler = cs
+	s.unpacker = newPacketUnpacker(cs, s.version)
+	s.streamsMap = newStreamsMap(s, s.newFlowController, s.config.MaxIncomingStreams, s.config.MaxIncomingUniStreams, s.perspective, s.version)
+	s.streamFramer = newStreamFramer(s.cryptoStream, s.streamsMap, s.version)
+	s.packer = newPacketPacker(
+		s.destConnID,
+		s.srcConnID,
+		initialPacketNumber,
+		s.sentPacketHandler.GetPacketNumberLen,
+		s.RemoteAddr(),
+		token,
+		nil, // no diversification nonce
+		cs,
+		s.streamFramer,
+		s.perspective,
+		s.version,
+	)
+	return s, s.postSetup()
 }
 
 func (s *session) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
@@ -317,18 +432,23 @@ func (s *session) SetFixedRate(rateInBitsPerSecond uint64) {
 }
 
 func (s *session) preSetup() {
-	// fmt.Printf("s.config.FlowteleSignalinterface = %+v\n", s.config.FlowteleSignalInterface)
 	s.rttStats = &congestion.RTTStats{FlowteleSignalInterface: s.config.FlowteleSignalInterface}
+	fmt.Printf("creating SentPacketHandler, config = %+v\n", s.config)
+	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats)
+	s.sentPacketHandler = ackhandler.NewFlowteleSentPacketHandler(s.rttStats, s.logger, s.config.FlowteleSignalInterface)
+	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats, s.logger, s.version)
+
 	s.connFlowController = flowcontrol.NewConnectionFlowController(
 		protocol.ReceiveConnectionFlowControlWindow,
 		protocol.ByteCount(s.config.MaxReceiveConnectionFlowControlWindow),
+		s.onHasConnectionWindowUpdate,
 		s.rttStats,
+		s.logger,
 	)
 	s.cryptoStream = s.newCryptoStream()
 }
 
-func (s *session) postSetup(initialPacketNumber protocol.PacketNumber) error {
-	s.handshakeChan = make(chan error, 1)
+func (s *session) postSetup() error {
 	s.receivedPackets = make(chan *receivedPacket, protocol.MaxSessionUnprocessedPackets)
 	s.closeChan = make(chan closeError, 1)
 	s.sendingScheduled = make(chan struct{}, 1)
@@ -339,27 +459,8 @@ func (s *session) postSetup(initialPacketNumber protocol.PacketNumber) error {
 	now := time.Now()
 	s.lastNetworkActivityTime = now
 	s.sessionCreationTime = now
-
-	fmt.Printf("creating SentPacketHandler, config = %+v\n", s.config)
-	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats)
-	s.sentPacketHandler = ackhandler.NewFlowteleSentPacketHandler(s.rttStats, s.config.FlowteleSignalInterface)
-	s.receivedPacketHandler = ackhandler.NewReceivedPacketHandler(s.version)
-
-	if s.version.UsesTLS() {
-		s.streamsMap = newStreamsMap(s.newStream, s.perspective)
-	} else {
-		s.streamsMap = newStreamsMapLegacy(s.newStream, s.perspective)
-	}
-	s.streamFramer = newStreamFramer(s.cryptoStream, s.streamsMap, s.version)
-	s.packer = newPacketPacker(s.connectionID,
-		initialPacketNumber,
-		s.cryptoSetup,
-		s.streamFramer,
-		s.perspective,
-		s.version,
-	)
-	s.windowUpdateQueue = newWindowUpdateQueue(s.streamsMap, s.cryptoStream, s.packer.QueueControlFrame)
-	s.unpacker = &packetUnpacker{aead: s.cryptoSetup, version: s.version}
+	s.receivedPacketHandler = ackhandler.NewReceivedPacketHandler(s.rttStats, s.logger, s.version)
+	s.windowUpdateQueue = newWindowUpdateQueue(s.streamsMap, s.cryptoStream, s.connFlowController, s.packer.QueueControlFrame)
 	return nil
 }
 
@@ -368,13 +469,12 @@ func (s *session) run() error {
 	defer s.ctxCancel()
 
 	go func() {
-		if err := s.cryptoSetup.HandleCryptoStream(); err != nil {
-			s.Close(err)
+		if err := s.cryptoStreamHandler.HandleCryptoStream(); err != nil {
+			s.closeLocal(err)
 		}
 	}()
 
 	var closeErr closeError
-	handshakeEvent := s.handshakeEvent
 
 runLoop:
 	for {
@@ -383,6 +483,9 @@ runLoop:
 		select {
 		case closeErr = <-s.closeChan:
 			break runLoop
+		case _, ok := <-s.handshakeEvent:
+			// when the handshake is completed, the channel will be closed
+			s.handleHandshakeEvent(!ok)
 		default:
 		}
 
@@ -410,31 +513,21 @@ runLoop:
 			}
 			// This is a bit unclean, but works properly, since the packet always
 			// begins with the public header and we never copy it.
-			putPacketBuffer(p.header.Raw)
+			putPacketBuffer(&p.header.Raw)
 		case p := <-s.paramsChan:
 			s.processTransportParameters(&p)
-		case _, ok := <-handshakeEvent:
-			if !ok { // the aeadChanged chan was closed. This means that the handshake is completed.
-				s.handshakeComplete = true
-				handshakeEvent = nil // prevent this case from ever being selected again
-				s.sentPacketHandler.SetHandshakeComplete()
-				if !s.version.UsesTLS() && s.perspective == protocol.PerspectiveClient {
-					// In gQUIC, there's no equivalent to the Finished message in TLS
-					// The server knows that the handshake is complete when it receives the first forward-secure packet sent by the client.
-					// We need to make sure that the client actually sends such a packet.
-					s.packer.QueueControlFrame(&wire.PingFrame{})
-				}
-				close(s.handshakeChan)
-			} else {
-				s.tryDecryptingQueuedPackets()
-			}
+		case _, ok := <-s.handshakeEvent:
+			// when the handshake is completed, the channel will be closed
+			s.handleHandshakeEvent(!ok)
 		}
 
 		now := time.Now()
 		if timeout := s.sentPacketHandler.GetAlarmTimeout(); !timeout.IsZero() && timeout.Before(now) {
-			// This could cause packets to be retransmitted, so check it before trying
-			// to send packets.
-			s.sentPacketHandler.OnAlarm()
+			// This could cause packets to be retransmitted.
+			// Check it before trying to send packets.
+			if err := s.sentPacketHandler.OnAlarm(); err != nil {
+				s.closeLocal(err)
+			}
 		}
 
 		var pacingDeadline time.Time
@@ -442,7 +535,8 @@ runLoop:
 			pacingDeadline = s.sentPacketHandler.TimeUntilSend()
 		}
 		if s.config.KeepAlive && !s.keepAlivePingSent && s.handshakeComplete && time.Since(s.lastNetworkActivityTime) >= s.peerParams.IdleTimeout/2 {
-			// send the PING frame since there is no activity in the session
+			// send a PING frame since there is no activity in the session
+			s.logger.Debugf("Sending a keep-alive ping to keep the connection alive.")
 			s.packer.QueueControlFrame(&wire.PingFrame{})
 			s.keepAlivePingSent = true
 		} else if !pacingDeadline.IsZero() && now.Before(pacingDeadline) {
@@ -468,12 +562,11 @@ runLoop:
 		}
 	}
 
-	// only send the error the handshakeChan when the handshake is not completed yet
-	// otherwise this chan will already be closed
-	if !s.handshakeComplete {
-		s.handshakeChan <- closeErr.err
+	if err := s.handleCloseError(closeErr); err != nil {
+		s.logger.Infof("Handling close error failed: %s", err)
 	}
-	s.handleCloseError(closeErr)
+	s.logger.Infof("Connection %s closed.", s.srcConnID)
+	s.sessionRunner.removeConnectionID(s.srcConnID)
 	return closeErr.err
 }
 
@@ -482,7 +575,7 @@ func (s *session) Context() context.Context {
 }
 
 func (s *session) ConnectionState() ConnectionState {
-	return s.cryptoSetup.ConnectionState()
+	return s.cryptoStreamHandler.ConnectionState()
 }
 
 func (s *session) maybeResetTimer() {
@@ -513,11 +606,42 @@ func (s *session) maybeResetTimer() {
 	s.timer.Reset(deadline)
 }
 
+func (s *session) handleHandshakeEvent(completed bool) {
+	if !completed {
+		s.tryDecryptingQueuedPackets()
+		return
+	}
+	s.handshakeComplete = true
+	s.handshakeEvent = nil // prevent this case from ever being selected again
+	s.sessionRunner.onHandshakeComplete(s)
+
+	// In gQUIC, the server completes the handshake first (after sending the SHLO).
+	// In TLS 1.3, the client completes the handshake first (after sending the CFIN).
+	// We need to make sure they learn about the peer completing the handshake,
+	// in order to stop retransmitting handshake packets.
+	// They will stop retransmitting handshake packets when receiving the first forward-secure packet.
+	// We need to make sure that a retransmittable forward-secure packet is sent,
+	// independent from the application protocol.
+	if (!s.version.UsesTLS() && s.perspective == protocol.PerspectiveClient) ||
+		(s.version.UsesTLS() && s.perspective == protocol.PerspectiveServer) {
+		s.queueControlFrame(&wire.PingFrame{})
+		s.sentPacketHandler.SetHandshakeComplete()
+	}
+}
+
 func (s *session) handlePacketImpl(p *receivedPacket) error {
+	hdr := p.header
+	// The server can change the source connection ID with the first Handshake packet.
+	// After this, all packets with a different source connection have to be ignored.
+	if s.receivedFirstPacket && hdr.IsLongHeader && !hdr.SrcConnectionID.Equal(s.destConnID) {
+		s.logger.Debugf("Dropping packet with unexpected source connection ID: %s (expected %s)", p.header.SrcConnectionID, s.destConnID)
+		return nil
+	}
 	if s.perspective == protocol.PerspectiveClient {
-		diversificationNonce := p.header.DiversificationNonce
-		if len(diversificationNonce) > 0 {
-			s.cryptoSetup.SetDiversificationNonce(diversificationNonce)
+		if divNonce := p.header.DiversificationNonce; len(divNonce) > 0 {
+			if err := s.cryptoStreamHandler.(divNonceSetter).SetDiversificationNonce(divNonce); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -526,39 +650,61 @@ func (s *session) handlePacketImpl(p *receivedPacket) error {
 		p.rcvTime = time.Now()
 	}
 
-	s.lastNetworkActivityTime = p.rcvTime
-	s.keepAlivePingSent = false
-	hdr := p.header
-	data := p.data
-
 	// Calculate packet number
 	hdr.PacketNumber = protocol.InferPacketNumber(
 		hdr.PacketNumberLen,
 		s.largestRcvdPacketNumber,
 		hdr.PacketNumber,
+		s.version,
 	)
 
-	packet, err := s.unpacker.Unpack(hdr.Raw, hdr, data)
-	if utils.Debug() {
+	packet, err := s.unpacker.Unpack(hdr.Raw, hdr, p.data)
+	if s.logger.Debug() {
 		if err != nil {
-			utils.Debugf("<- Reading packet 0x%x (%d bytes) for connection %x", hdr.PacketNumber, len(data)+len(hdr.Raw), hdr.ConnectionID)
+			s.logger.Debugf("<- Reading packet 0x%x (%d bytes) for connection %s", hdr.PacketNumber, len(p.data)+len(hdr.Raw), hdr.DestConnectionID)
 		} else {
-			utils.Debugf("<- Reading packet 0x%x (%d bytes) for connection %x, %s", hdr.PacketNumber, len(data)+len(hdr.Raw), hdr.ConnectionID, packet.encryptionLevel)
+			s.logger.Debugf("<- Reading packet 0x%x (%d bytes) for connection %s, %s", hdr.PacketNumber, len(p.data)+len(hdr.Raw), hdr.DestConnectionID, packet.encryptionLevel)
 		}
-		hdr.Log()
+		hdr.Log(s.logger)
 	}
 	// if the decryption failed, this might be a packet sent by an attacker
 	if err != nil {
 		return err
 	}
 
+	// The server can change the source connection ID with the first Handshake packet.
+	if s.perspective == protocol.PerspectiveClient && !s.receivedFirstPacket && hdr.IsLongHeader && !hdr.SrcConnectionID.Equal(s.destConnID) {
+		s.logger.Debugf("Received first packet. Switching destination connection ID to: %s", hdr.SrcConnectionID)
+		s.destConnID = hdr.SrcConnectionID
+		s.packer.ChangeDestConnectionID(s.destConnID)
+	}
+
+	s.receivedFirstPacket = true
+	s.lastNetworkActivityTime = p.rcvTime
+	s.keepAlivePingSent = false
+
+	// In gQUIC, the server completes the handshake first (after sending the SHLO).
+	// In TLS 1.3, the client completes the handshake first (after sending the CFIN).
+	// We know that the peer completed the handshake as soon as we receive a forward-secure packet.
+	if (!s.version.UsesTLS() && s.perspective == protocol.PerspectiveServer) ||
+		(s.version.UsesTLS() && s.perspective == protocol.PerspectiveClient) {
+		if !s.receivedFirstForwardSecurePacket && packet.encryptionLevel == protocol.EncryptionForwardSecure {
+			s.receivedFirstForwardSecurePacket = true
+			s.sentPacketHandler.SetHandshakeComplete()
+		}
+	}
+
 	s.lastRcvdPacketNumber = hdr.PacketNumber
 	// Only do this after decrypting, so we are sure the packet is not attacker-controlled
 	s.largestRcvdPacketNumber = utils.MaxPacketNumber(s.largestRcvdPacketNumber, hdr.PacketNumber)
 
-	isRetransmittable := ackhandler.HasRetransmittableFrames(packet.frames)
-	if err = s.receivedPacketHandler.ReceivedPacket(hdr.PacketNumber, p.rcvTime, isRetransmittable); err != nil {
-		return err
+	// If this is a Retry packet, there's no need to send an ACK.
+	// The session will be closed and recreated as soon as the crypto setup processed the HRR.
+	if hdr.Type != protocol.PacketTypeRetry {
+		isRetransmittable := ackhandler.HasRetransmittableFrames(packet.frames)
+		if err := s.receivedPacketHandler.ReceivedPacket(hdr.PacketNumber, p.rcvTime, isRetransmittable); err != nil {
+			return err
+		}
 	}
 
 	return s.handleFrames(packet.frames, packet.encryptionLevel)
@@ -567,10 +713,10 @@ func (s *session) handlePacketImpl(p *receivedPacket) error {
 func (s *session) handleFrames(fs []wire.Frame, encLevel protocol.EncryptionLevel) error {
 	for _, ff := range fs {
 		var err error
-		wire.LogFrame(ff, false)
+		wire.LogFrame(s.logger, ff, false)
 		switch frame := ff.(type) {
 		case *wire.StreamFrame:
-			err = s.handleStreamFrame(frame)
+			err = s.handleStreamFrame(frame, encLevel)
 		case *wire.AckFrame:
 			err = s.handleAckFrame(frame, encLevel)
 		case *wire.ConnectionCloseFrame:
@@ -584,22 +730,25 @@ func (s *session) handleFrames(fs []wire.Frame, encLevel protocol.EncryptionLeve
 			s.handleMaxDataFrame(frame)
 		case *wire.MaxStreamDataFrame:
 			err = s.handleMaxStreamDataFrame(frame)
+		case *wire.MaxStreamIDFrame:
+			err = s.handleMaxStreamIDFrame(frame)
 		case *wire.BlockedFrame:
 		case *wire.StreamBlockedFrame:
+		case *wire.StreamIDBlockedFrame:
 		case *wire.StopSendingFrame:
 			err = s.handleStopSendingFrame(frame)
 		case *wire.PingFrame:
+		case *wire.PathChallengeFrame:
+			s.handlePathChallengeFrame(frame)
+		case *wire.PathResponseFrame:
+			// since we don't send PATH_CHALLENGEs, we don't expect PATH_RESPONSEs
+			err = errors.New("unexpected PATH_RESPONSE frame")
 		default:
 			return errors.New("Session BUG: unexpected frame type")
 		}
 
 		if err != nil {
-			switch err {
-			case ackhandler.ErrDuplicateOrOutOfOrderAck:
-				// Can happen e.g. when packets thought missing arrive late
-			default:
-				return err
-			}
+			return err
 		}
 	}
 	return nil
@@ -615,12 +764,14 @@ func (s *session) handlePacket(p *receivedPacket) {
 	}
 }
 
-func (s *session) handleStreamFrame(frame *wire.StreamFrame) error {
+func (s *session) handleStreamFrame(frame *wire.StreamFrame, encLevel protocol.EncryptionLevel) error {
 	if frame.StreamID == s.version.CryptoStreamID() {
 		if frame.FinBit {
 			return errors.New("Received STREAM frame with FIN bit for the crypto stream")
 		}
 		return s.cryptoStream.handleStreamFrame(frame)
+	} else if encLevel <= protocol.EncryptionUnencrypted {
+		return qerr.Error(qerr.UnencryptedStreamData, fmt.Sprintf("received unencrypted stream data on stream %d", frame.StreamID))
 	}
 	str, err := s.streamsMap.GetOrOpenReceiveStream(frame.StreamID)
 	if err != nil {
@@ -655,6 +806,10 @@ func (s *session) handleMaxStreamDataFrame(frame *wire.MaxStreamDataFrame) error
 	return nil
 }
 
+func (s *session) handleMaxStreamIDFrame(frame *wire.MaxStreamIDFrame) error {
+	return s.streamsMap.HandleMaxStreamIDFrame(frame)
+}
+
 func (s *session) handleRstStreamFrame(frame *wire.RstStreamFrame) error {
 	if frame.StreamID == s.version.CryptoStreamID() {
 		return errors.New("Received RST_STREAM frame for the crypto stream")
@@ -686,6 +841,10 @@ func (s *session) handleStopSendingFrame(frame *wire.StopSendingFrame) error {
 	return nil
 }
 
+func (s *session) handlePathChallengeFrame(frame *wire.PathChallengeFrame) {
+	s.queueControlFrame(&wire.PathResponseFrame{Data: frame.Data})
+}
+
 func (s *session) handleAckFrame(frame *wire.AckFrame, encLevel protocol.EncryptionLevel) error {
 	if err := s.sentPacketHandler.ReceivedAck(frame, s.lastRcvdPacketNumber, encLevel, s.lastNetworkActivityTime); err != nil {
 		return err
@@ -694,9 +853,17 @@ func (s *session) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encrypt
 	return nil
 }
 
+// closeLocal closes the session and send a CONNECTION_CLOSE containing the error
 func (s *session) closeLocal(e error) {
 	s.closeOnce.Do(func() {
-		s.closeChan <- closeError{err: e, remote: false}
+		s.closeChan <- closeError{err: e, sendClose: true, remote: false}
+	})
+}
+
+// destroy closes the session without sending the error on the wire
+func (s *session) destroy(e error) {
+	s.closeOnce.Do(func() {
+		s.closeChan <- closeError{err: e, sendClose: false, remote: false}
 	})
 }
 
@@ -706,10 +873,16 @@ func (s *session) closeRemote(e error) {
 	})
 }
 
-// Close the connection. If err is nil it will be set to qerr.PeerGoingAway.
+// Close the connection. It sends a qerr.PeerGoingAway.
 // It waits until the run loop has stopped before returning
-func (s *session) Close(e error) error {
-	s.closeLocal(e)
+func (s *session) Close() error {
+	s.closeLocal(nil)
+	<-s.ctx.Done()
+	return nil
+}
+
+func (s *session) CloseWithError(code protocol.ApplicationErrorCode, e error) error {
+	s.closeLocal(qerr.Error(qerr.ErrorCode(code), e.Error()))
 	<-s.ctx.Done()
 	return nil
 }
@@ -726,15 +899,15 @@ func (s *session) handleCloseError(closeErr closeError) error {
 	}
 	// Don't log 'normal' reasons
 	if quicErr.ErrorCode == qerr.PeerGoingAway || quicErr.ErrorCode == qerr.NetworkIdleTimeout {
-		utils.Infof("Closing connection %x", s.connectionID)
+		s.logger.Infof("Closing connection %s.", s.srcConnID)
 	} else {
-		utils.Errorf("Closing session with error: %s", closeErr.err.Error())
+		s.logger.Errorf("Closing session with error: %s", closeErr.err.Error())
 	}
 
 	s.cryptoStream.closeForShutdown(quicErr)
 	s.streamsMap.CloseWithError(quicErr)
 
-	if closeErr.err == errCloseSessionForNewVersion || closeErr.err == handshake.ErrCloseSessionForRetry {
+	if !closeErr.sendClose {
 		return nil
 	}
 
@@ -744,7 +917,6 @@ func (s *session) handleCloseError(closeErr closeError) error {
 	}
 
 	if quicErr.ErrorCode == qerr.DecryptionFailure ||
-		quicErr == handshake.ErrHOLExperiment ||
 		quicErr == handshake.ErrNSTPExperiment {
 		return s.sendPublicReset(s.lastRcvdPacketNumber)
 	}
@@ -757,6 +929,9 @@ func (s *session) processTransportParameters(params *handshake.TransportParamete
 	if params.OmitConnectionID {
 		s.packer.SetOmitConnectionID()
 	}
+	if params.MaxPacketSize != 0 {
+		s.packer.SetMaxPacketSize(params.MaxPacketSize)
+	}
 	s.connFlowController.UpdateSendWindow(params.ConnectionFlowControlWindow)
 	// the crypto stream is the only open stream at this moment
 	// so we don't need to update stream flow control windows
@@ -764,23 +939,61 @@ func (s *session) processTransportParameters(params *handshake.TransportParamete
 
 func (s *session) sendPackets() error {
 	s.pacingDeadline = time.Time{}
-	if !s.sentPacketHandler.SendingAllowed() { // if congestion limited, at least try sending an ACK frame
-		return s.maybeSendAckOnlyPacket()
+
+	sendMode := s.sentPacketHandler.SendMode()
+	if sendMode == ackhandler.SendNone { // shortcut: return immediately if there's nothing to send
+		return nil
 	}
+
 	numPackets := s.sentPacketHandler.ShouldSendNumPackets()
-	for i := 0; i < numPackets; i++ {
-		sentPacket, err := s.sendPacket()
-		if err != nil {
-			return err
+	var numPacketsSent int
+sendLoop:
+	for {
+		switch sendMode {
+		case ackhandler.SendNone:
+			break sendLoop
+		case ackhandler.SendAck:
+			// We can at most send a single ACK only packet.
+			// There will only be a new ACK after receiving new packets.
+			// SendAck is only returned when we're congestion limited, so we don't need to set the pacingt timer.
+			return s.maybeSendAckOnlyPacket()
+		case ackhandler.SendTLP, ackhandler.SendRTO:
+			if err := s.sendProbePacket(); err != nil {
+				return err
+			}
+			numPacketsSent++
+		case ackhandler.SendRetransmission:
+			sentPacket, err := s.maybeSendRetransmission()
+			if err != nil {
+				return err
+			}
+			if sentPacket {
+				numPacketsSent++
+				// This can happen if a retransmission queued, but it wasn't necessary to send it.
+				// e.g. when an Initial is queued, but we already received a packet from the server.
+			}
+		case ackhandler.SendAny:
+			sentPacket, err := s.sendPacket()
+			if err != nil {
+				return err
+			}
+			if !sentPacket {
+				break sendLoop
+			}
+			numPacketsSent++
+		default:
+			return fmt.Errorf("BUG: invalid send mode %d", sendMode)
 		}
-		// If no packet was sent, or we're congestion limit, we're done here.
-		if !sentPacket || !s.sentPacketHandler.SendingAllowed() {
-			return nil
+		if numPacketsSent >= numPackets {
+			break
 		}
+		sendMode = s.sentPacketHandler.SendMode()
 	}
 	// Only start the pacing timer if we sent as many packets as we were allowed.
 	// There will probably be more to send when calling sendPacket again.
-	s.pacingDeadline = s.sentPacketHandler.TimeUntilSend()
+	if numPacketsSent == numPackets {
+		s.pacingDeadline = s.sentPacketHandler.TimeUntilSend()
+	}
 	return nil
 }
 
@@ -791,7 +1004,7 @@ func (s *session) maybeSendAckOnlyPacket() error {
 	}
 	s.packer.QueueControlFrame(ack)
 
-	if !s.version.UsesIETFFrameFormat() { // for gQUIC, maybe add a STOP_WAITING
+	if s.version.UsesStopWaitingFrames() { // for gQUIC, maybe add a STOP_WAITING
 		if swf := s.sentPacketHandler.GetStopWaitingFrame(false); swf != nil {
 			s.packer.QueueControlFrame(swf)
 		}
@@ -800,72 +1013,103 @@ func (s *session) maybeSendAckOnlyPacket() error {
 	if err != nil {
 		return err
 	}
+	s.sentPacketHandler.SentPacket(packet.ToAckHandlerPacket())
 	return s.sendPackedPacket(packet)
 }
 
-func (s *session) sendPacket() (bool, error) {
-	s.packer.SetLeastUnacked(s.sentPacketHandler.GetLeastUnacked())
+// maybeSendRetransmission sends retransmissions for at most one packet.
+// It takes care that Initials aren't retransmitted, if a packet from the server was already received.
+func (s *session) maybeSendRetransmission() (bool, error) {
+	var retransmitPacket *ackhandler.Packet
+	for {
+		retransmitPacket = s.sentPacketHandler.DequeuePacketForRetransmission()
+		if retransmitPacket == nil {
+			return false, nil
+		}
 
-	if offset := s.connFlowController.GetWindowUpdate(); offset != 0 {
-		s.packer.QueueControlFrame(&wire.MaxDataFrame{ByteOffset: offset})
+		// Don't retransmit Initial packets if we already received a response.
+		// An Initial might have been retransmitted multiple times before we receive a response.
+		// As soon as we receive one response, we don't need to send any more Initials.
+		if s.receivedFirstPacket && retransmitPacket.PacketType == protocol.PacketTypeInitial {
+			s.logger.Debugf("Skipping retransmission of packet %d. Already received a response to an Initial.", retransmitPacket.PacketNumber)
+			continue
+		}
+		break
 	}
+
+	if retransmitPacket.EncryptionLevel != protocol.EncryptionForwardSecure {
+		s.logger.Debugf("Dequeueing handshake retransmission for packet 0x%x", retransmitPacket.PacketNumber)
+	} else {
+		s.logger.Debugf("Dequeueing retransmission for packet 0x%x", retransmitPacket.PacketNumber)
+	}
+
+	if s.version.UsesStopWaitingFrames() {
+		s.packer.QueueControlFrame(s.sentPacketHandler.GetStopWaitingFrame(true))
+	}
+	packets, err := s.packer.PackRetransmission(retransmitPacket)
+	if err != nil {
+		return false, err
+	}
+	ackhandlerPackets := make([]*ackhandler.Packet, len(packets))
+	for i, packet := range packets {
+		ackhandlerPackets[i] = packet.ToAckHandlerPacket()
+	}
+	s.sentPacketHandler.SentPacketsAsRetransmission(ackhandlerPackets, retransmitPacket.PacketNumber)
+	for _, packet := range packets {
+		if err := s.sendPackedPacket(packet); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (s *session) sendProbePacket() error {
+	p, err := s.sentPacketHandler.DequeueProbePacket()
+	if err != nil {
+		return err
+	}
+	s.logger.Debugf("Sending a retransmission for %#x as a probe packet.", p.PacketNumber)
+
+	if s.version.UsesStopWaitingFrames() {
+		s.packer.QueueControlFrame(s.sentPacketHandler.GetStopWaitingFrame(true))
+	}
+	packets, err := s.packer.PackRetransmission(p)
+	if err != nil {
+		return err
+	}
+	ackhandlerPackets := make([]*ackhandler.Packet, len(packets))
+	for i, packet := range packets {
+		ackhandlerPackets[i] = packet.ToAckHandlerPacket()
+	}
+	s.sentPacketHandler.SentPacketsAsRetransmission(ackhandlerPackets, p.PacketNumber)
+	for _, packet := range packets {
+		if err := s.sendPackedPacket(packet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *session) sendPacket() (bool, error) {
 	if isBlocked, offset := s.connFlowController.IsNewlyBlocked(); isBlocked {
 		s.packer.QueueControlFrame(&wire.BlockedFrame{Offset: offset})
 	}
 	s.windowUpdateQueue.QueueAll()
 
-	ack := s.receivedPacketHandler.GetAckFrame()
-	if ack != nil {
+	if ack := s.receivedPacketHandler.GetAckFrame(); ack != nil {
 		s.packer.QueueControlFrame(ack)
-	}
-
-	// check for retransmissions first
-	for {
-		retransmitPacket := s.sentPacketHandler.DequeuePacketForRetransmission()
-		if retransmitPacket == nil {
-			break
-		}
-
-		// retransmit handshake packets
-		if retransmitPacket.EncryptionLevel != protocol.EncryptionForwardSecure {
-			utils.Debugf("\tDequeueing handshake retransmission for packet 0x%x", retransmitPacket.PacketNumber)
-			if !s.version.UsesIETFFrameFormat() {
-				s.packer.QueueControlFrame(s.sentPacketHandler.GetStopWaitingFrame(true))
-			}
-			packet, err := s.packer.PackHandshakeRetransmission(retransmitPacket)
-			if err != nil {
-				return false, err
-			}
-			if err := s.sendPackedPacket(packet); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-
-		// queue all retransmittable frames sent in forward-secure packets
-		utils.Debugf("\tDequeueing retransmission for packet 0x%x", retransmitPacket.PacketNumber)
-		// resend the frames that were in the packet
-		for _, frame := range retransmitPacket.GetFramesForRetransmission() {
-			// TODO: only retransmit WINDOW_UPDATEs if they actually enlarge the window
-			switch f := frame.(type) {
-			case *wire.StreamFrame:
-				s.streamFramer.AddFrameForRetransmission(f)
-			default:
-				s.packer.QueueControlFrame(frame)
+		if s.version.UsesStopWaitingFrames() {
+			if swf := s.sentPacketHandler.GetStopWaitingFrame(false); swf != nil {
+				s.packer.QueueControlFrame(swf)
 			}
 		}
 	}
 
-	hasRetransmission := s.streamFramer.HasFramesForRetransmission()
-	if !s.version.UsesIETFFrameFormat() && (ack != nil || hasRetransmission) {
-		if swf := s.sentPacketHandler.GetStopWaitingFrame(hasRetransmission); swf != nil {
-			s.packer.QueueControlFrame(swf)
-		}
-	}
 	packet, err := s.packer.PackPacket()
 	if err != nil || packet == nil {
 		return false, err
 	}
+	s.sentPacketHandler.SentPacket(packet.ToAckHandlerPacket())
 	if err := s.sendPackedPacket(packet); err != nil {
 		return false, err
 	}
@@ -873,22 +1117,12 @@ func (s *session) sendPacket() (bool, error) {
 }
 
 func (s *session) sendPackedPacket(packet *packedPacket) error {
-	defer putPacketBuffer(packet.raw)
-	err := s.sentPacketHandler.SentPacket(&ackhandler.Packet{
-		PacketNumber:    packet.header.PacketNumber,
-		Frames:          packet.frames,
-		Length:          protocol.ByteCount(len(packet.raw)),
-		EncryptionLevel: packet.encryptionLevel,
-	})
-	if err != nil {
-		return err
-	}
+	defer putPacketBuffer(&packet.raw)
 	s.logPacket(packet)
 	return s.conn.Write(packet.raw)
 }
 
 func (s *session) sendConnectionClose(quicErr *qerr.QuicError) error {
-	s.packer.SetLeastUnacked(s.sentPacketHandler.GetLeastUnacked())
 	packet, err := s.packer.PackConnectionClose(&wire.ConnectionCloseFrame{
 		ErrorCode:    quicErr.ErrorCode,
 		ReasonPhrase: quicErr.ErrorMessage,
@@ -901,31 +1135,39 @@ func (s *session) sendConnectionClose(quicErr *qerr.QuicError) error {
 }
 
 func (s *session) logPacket(packet *packedPacket) {
-	if !utils.Debug() {
+	if !s.logger.Debug() {
 		// We don't need to allocate the slices for calling the format functions
 		return
 	}
-	utils.Debugf("-> Sending packet 0x%x (%d bytes) for connection %x, %s", packet.header.PacketNumber, len(packet.raw), s.connectionID, packet.encryptionLevel)
-	packet.header.Log()
+	s.logger.Debugf("-> Sending packet 0x%x (%d bytes) for connection %s, %s", packet.header.PacketNumber, len(packet.raw), s.srcConnID, packet.encryptionLevel)
+	packet.header.Log(s.logger)
 	for _, frame := range packet.frames {
-		wire.LogFrame(frame, true)
+		wire.LogFrame(s.logger, frame, true)
 	}
 }
 
 // GetOrOpenStream either returns an existing stream, a newly opened stream, or nil if a stream with the provided ID is already closed.
-// Newly opened streams should only originate from the client. To open a stream from the server, OpenStream should be used.
+// It is *only* needed for gQUIC's H2.
+// It will be removed as soon as gQUIC moves towards the IETF H2/QUIC stream mapping.
 func (s *session) GetOrOpenStream(id protocol.StreamID) (Stream, error) {
-	str, err := s.streamsMap.GetOrOpenStream(id)
+	str, err := s.streamsMap.GetOrOpenSendStream(id)
 	if str != nil {
-		return str, err
+		if bstr, ok := str.(Stream); ok {
+			return bstr, err
+		}
+		return nil, fmt.Errorf("Stream %d is not a bidirectional stream", id)
 	}
 	// make sure to return an actual nil value here, not an Stream with value nil
-	return str, err
+	return nil, err
 }
 
 // AcceptStream returns the next stream openend by the peer
 func (s *session) AcceptStream() (Stream, error) {
 	return s.streamsMap.AcceptStream()
+}
+
+func (s *session) AcceptUniStream() (ReceiveStream, error) {
+	return s.streamsMap.AcceptUniStream()
 }
 
 // OpenStream opens a stream
@@ -937,24 +1179,38 @@ func (s *session) OpenStreamSync() (Stream, error) {
 	return s.streamsMap.OpenStreamSync()
 }
 
+func (s *session) OpenUniStream() (SendStream, error) {
+	return s.streamsMap.OpenUniStream()
+}
+
+func (s *session) OpenUniStreamSync() (SendStream, error) {
+	return s.streamsMap.OpenUniStreamSync()
+}
+
 func (s *session) newStream(id protocol.StreamID) streamI {
+	flowController := s.newFlowController(id)
+	return newStream(id, s, flowController, s.version)
+}
+
+func (s *session) newFlowController(id protocol.StreamID) flowcontrol.StreamFlowController {
 	var initialSendWindow protocol.ByteCount
 	if s.peerParams != nil {
 		initialSendWindow = s.peerParams.StreamFlowControlWindow
 	}
-	flowController := flowcontrol.NewStreamFlowController(
+	return flowcontrol.NewStreamFlowController(
 		id,
 		s.version.StreamContributesToConnectionFlowControl(id),
 		s.connFlowController,
 		protocol.ReceiveStreamFlowControlWindow,
 		protocol.ByteCount(s.config.MaxReceiveStreamFlowControlWindow),
 		initialSendWindow,
+		s.onHasStreamWindowUpdate,
 		s.rttStats,
+		s.logger,
 	)
-	return newStream(id, s, flowController, s.version)
 }
 
-func (s *session) newCryptoStream() cryptoStreamI {
+func (s *session) newCryptoStream() cryptoStream {
 	id := s.version.CryptoStreamID()
 	flowController := flowcontrol.NewStreamFlowController(
 		id,
@@ -963,14 +1219,16 @@ func (s *session) newCryptoStream() cryptoStreamI {
 		protocol.ReceiveStreamFlowControlWindow,
 		protocol.ByteCount(s.config.MaxReceiveStreamFlowControlWindow),
 		0,
+		s.onHasStreamWindowUpdate,
 		s.rttStats,
+		s.logger,
 	)
 	return newCryptoStream(s, flowController, s.version)
 }
 
 func (s *session) sendPublicReset(rejectedPacketNumber protocol.PacketNumber) error {
-	utils.Infof("Sending public reset for connection %x, packet number %d", s.connectionID, rejectedPacketNumber)
-	return s.conn.Write(wire.WritePublicReset(s.connectionID, rejectedPacketNumber, 0))
+	s.logger.Infof("Sending PUBLIC_RESET for connection %s, packet number %d", s.destConnID, rejectedPacketNumber)
+	return s.conn.Write(wire.WritePublicReset(s.destConnID, rejectedPacketNumber, 0))
 }
 
 // scheduleSending signals that we have data for sending
@@ -983,7 +1241,7 @@ func (s *session) scheduleSending() {
 
 func (s *session) tryQueueingUndecryptablePacket(p *receivedPacket) {
 	if s.handshakeComplete {
-		utils.Debugf("Received undecryptable packet from %s after the handshake: %#v, %d bytes data", p.remoteAddr.String(), p.header, len(p.data))
+		s.logger.Debugf("Received undecryptable packet from %s after the handshake: %#v, %d bytes data", p.remoteAddr.String(), p.header, len(p.data))
 		return
 	}
 	if len(s.undecryptablePackets)+1 > protocol.MaxUndecryptablePackets {
@@ -992,10 +1250,10 @@ func (s *session) tryQueueingUndecryptablePacket(p *receivedPacket) {
 			s.receivedTooManyUndecrytablePacketsTime = time.Now()
 			s.maybeResetTimer()
 		}
-		utils.Infof("Dropping undecrytable packet 0x%x (undecryptable packet queue full)", p.header.PacketNumber)
+		s.logger.Infof("Dropping undecrytable packet 0x%x (undecryptable packet queue full)", p.header.PacketNumber)
 		return
 	}
-	utils.Infof("Queueing packet 0x%x for later decryption", p.header.PacketNumber)
+	s.logger.Infof("Queueing packet 0x%x for later decryption", p.header.PacketNumber)
 	s.undecryptablePackets = append(s.undecryptablePackets, p)
 }
 
@@ -1011,8 +1269,13 @@ func (s *session) queueControlFrame(f wire.Frame) {
 	s.scheduleSending()
 }
 
-func (s *session) onHasWindowUpdate(id protocol.StreamID) {
-	s.windowUpdateQueue.Add(id)
+func (s *session) onHasStreamWindowUpdate(id protocol.StreamID) {
+	s.windowUpdateQueue.AddStream(id)
+	s.scheduleSending()
+}
+
+func (s *session) onHasConnectionWindowUpdate() {
+	s.windowUpdateQueue.AddConnection()
 	s.scheduleSending()
 }
 
@@ -1023,7 +1286,7 @@ func (s *session) onHasStreamData(id protocol.StreamID) {
 
 func (s *session) onStreamCompleted(id protocol.StreamID) {
 	if err := s.streamsMap.DeleteStream(id); err != nil {
-		s.Close(err)
+		s.closeLocal(err)
 	}
 }
 
@@ -1031,17 +1294,8 @@ func (s *session) LocalAddr() net.Addr {
 	return s.conn.LocalAddr()
 }
 
-// RemoteAddr returns the net.Addr of the client
 func (s *session) RemoteAddr() net.Addr {
 	return s.conn.RemoteAddr()
-}
-
-func (s *session) handshakeStatus() <-chan error {
-	return s.handshakeChan
-}
-
-func (s *session) getCryptoStream() cryptoStreamI {
-	return s.cryptoStream
 }
 
 func (s *session) GetVersion() protocol.VersionNumber {

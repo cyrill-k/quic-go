@@ -3,6 +3,7 @@ package chrome_test
 import (
 	"fmt"
 
+	"github.com/lucas-clemente/quic-go/integrationtests/tools/testserver"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 
 	. "github.com/onsi/ginkgo"
@@ -10,9 +11,18 @@ import (
 
 var _ = Describe("Chrome tests", func() {
 	for i := range protocol.SupportedVersions {
-		version = protocol.SupportedVersions[i]
+		version := protocol.SupportedVersions[i]
+
+		// TODO: activate Chrome integration tests with gQUIC 44
+		if version == protocol.Version44 {
+			continue
+		}
 
 		Context(fmt.Sprintf("with version %s", version), func() {
+			JustBeforeEach(func() {
+				testserver.StartQuicServer([]protocol.VersionNumber{version})
+			})
+
 			It("downloads a small file", func() {
 				chromeTest(
 					version,
@@ -54,7 +64,7 @@ var _ = Describe("Chrome tests", func() {
 			})
 
 			It("uploads many small files", func() {
-				num := protocol.MaxIncomingStreams + 20
+				num := protocol.DefaultMaxIncomingStreams + 20
 				chromeTest(
 					version,
 					fmt.Sprintf("https://quic.clemente.io/uploadtest?num=%d&len=%d", num, dataLen),

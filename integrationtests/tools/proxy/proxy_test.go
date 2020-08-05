@@ -3,7 +3,9 @@ package quicproxy
 import (
 	"bytes"
 	"net"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,8 +25,8 @@ var _ = Describe("QUIC Proxy", func() {
 		hdr := wire.Header{
 			PacketNumber:     p,
 			PacketNumberLen:  protocol.PacketNumberLen6,
-			ConnectionID:     1337,
-			OmitConnectionID: false,
+			DestConnectionID: protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
+			SrcConnectionID:  protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
 		}
 		hdr.Write(b, protocol.PerspectiveServer, protocol.VersionWhatever)
 		raw := b.Bytes()
@@ -47,9 +49,16 @@ var _ = Describe("QUIC Proxy", func() {
 		})
 
 		It("stops the UDPProxy", func() {
+			isProxyRunning := func() bool {
+				var b bytes.Buffer
+				pprof.Lookup("goroutine").WriteTo(&b, 1)
+				return strings.Contains(b.String(), "proxy.(*QuicProxy).runProxy")
+			}
+
 			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, nil)
 			Expect(err).ToNot(HaveOccurred())
 			port := proxy.LocalPort()
+			Expect(isProxyRunning()).To(BeTrue())
 			err = proxy.Close()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -65,6 +74,34 @@ var _ = Describe("QUIC Proxy", func() {
 				ln.Close()
 				return nil
 			}).ShouldNot(HaveOccurred())
+			Eventually(isProxyRunning).Should(BeFalse())
+		})
+
+		It("stops listening for proxied connections", func() {
+			isConnRunning := func() bool {
+				var b bytes.Buffer
+				pprof.Lookup("goroutine").WriteTo(&b, 1)
+				return strings.Contains(b.String(), "proxy.(*QuicProxy).runConnection")
+			}
+
+			serverAddr, err := net.ResolveUDPAddr("udp", "localhost:0")
+			Expect(err).ToNot(HaveOccurred())
+			serverConn, err := net.ListenUDP("udp", serverAddr)
+			Expect(err).ToNot(HaveOccurred())
+			defer serverConn.Close()
+
+			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, &Opts{RemoteAddr: serverConn.LocalAddr().String()})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(isConnRunning()).To(BeFalse())
+
+			// check that the proxy port is not in use anymore
+			conn, err := net.DialUDP("udp", nil, proxy.LocalAddr().(*net.UDPAddr))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = conn.Write(makePacket(1, []byte("foobar")))
+			Expect(err).ToNot(HaveOccurred())
+			Eventually(isConnRunning).Should(BeTrue())
+			Expect(proxy.Close()).To(Succeed())
+			Eventually(isConnRunning).Should(BeFalse())
 		})
 
 		It("has the correct LocalAddr and LocalPort", func() {
@@ -119,7 +156,7 @@ var _ = Describe("QUIC Proxy", func() {
 
 			go func() {
 				for {
-					buf := make([]byte, protocol.MaxPacketSize)
+					buf := make([]byte, protocol.MaxReceivePacketSize)
 					// the ReadFromUDP will error as soon as the UDP conn is closed
 					n, addr, err2 := serverConn.ReadFromUDP(buf)
 					if err2 != nil {
@@ -154,7 +191,7 @@ var _ = Describe("QUIC Proxy", func() {
 				Eventually(getClientDict).Should(HaveLen(1))
 				var conn *connection
 				for _, conn = range getClientDict() {
-					Expect(atomic.LoadUint64(&conn.incomingPacketCounter)).To(Equal(uint64(1)))
+					Eventually(func() uint64 { return atomic.LoadUint64(&conn.incomingPacketCounter) }).Should(Equal(uint64(1)))
 				}
 
 				// send the second packet
@@ -194,7 +231,7 @@ var _ = Describe("QUIC Proxy", func() {
 				// receive the packets echoed by the server on client side
 				go func() {
 					for {
-						buf := make([]byte, protocol.MaxPacketSize)
+						buf := make([]byte, protocol.MaxReceivePacketSize)
 						// the ReadFromUDP will error as soon as the UDP conn is closed
 						n, _, err2 := clientConn.ReadFromUDP(buf)
 						if err2 != nil {
@@ -245,7 +282,7 @@ var _ = Describe("QUIC Proxy", func() {
 				// receive the packets echoed by the server on client side
 				go func() {
 					for {
-						buf := make([]byte, protocol.MaxPacketSize)
+						buf := make([]byte, protocol.MaxReceivePacketSize)
 						// the ReadFromUDP will error as soon as the UDP conn is closed
 						n, _, err2 := clientConn.ReadFromUDP(buf)
 						if err2 != nil {
@@ -326,7 +363,7 @@ var _ = Describe("QUIC Proxy", func() {
 				// receive the packets echoed by the server on client side
 				go func() {
 					for {
-						buf := make([]byte, protocol.MaxPacketSize)
+						buf := make([]byte, protocol.MaxReceivePacketSize)
 						// the ReadFromUDP will error as soon as the UDP conn is closed
 						n, _, err2 := clientConn.ReadFromUDP(buf)
 						if err2 != nil {

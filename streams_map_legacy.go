@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -26,7 +27,7 @@ type streamsMapLegacy struct {
 	closeErr           error
 	nextStreamToAccept protocol.StreamID
 
-	newStream newStreamLambda
+	newStream func(protocol.StreamID) streamI
 
 	numOutgoingStreams uint32
 	numIncomingStreams uint32
@@ -36,11 +37,12 @@ type streamsMapLegacy struct {
 
 var _ streamManager = &streamsMapLegacy{}
 
-func newStreamsMapLegacy(newStream newStreamLambda, pers protocol.Perspective) streamManager {
+var errMapAccess = errors.New("streamsMap: Error accessing the streams map")
+
+func newStreamsMapLegacy(newStream func(protocol.StreamID) streamI, maxStreams int, pers protocol.Perspective) streamManager {
 	// add some tolerance to the maximum incoming streams value
-	maxStreams := uint32(protocol.MaxIncomingStreams)
 	maxIncomingStreams := utils.MaxUint32(
-		maxStreams+protocol.MaxStreamsMinimumIncrement,
+		uint32(maxStreams)+protocol.MaxStreamsMinimumIncrement,
 		uint32(float64(maxStreams)*float64(protocol.MaxStreamsMultiplier)),
 	)
 	sm := streamsMapLegacy{
@@ -77,17 +79,17 @@ func (m *streamsMapLegacy) streamInitiatedBy(id protocol.StreamID) protocol.Pers
 
 func (m *streamsMapLegacy) GetOrOpenReceiveStream(id protocol.StreamID) (receiveStreamI, error) {
 	// every bidirectional stream is also a receive stream
-	return m.GetOrOpenStream(id)
+	return m.getOrOpenStream(id)
 }
 
 func (m *streamsMapLegacy) GetOrOpenSendStream(id protocol.StreamID) (sendStreamI, error) {
 	// every bidirectional stream is also a send stream
-	return m.GetOrOpenStream(id)
+	return m.getOrOpenStream(id)
 }
 
-// GetOrOpenStream either returns an existing stream, a newly opened stream, or nil if a stream with the provided ID is already closed.
+// getOrOpenStream either returns an existing stream, a newly opened stream, or nil if a stream with the provided ID is already closed.
 // Newly opened streams should only originate from the client. To open a stream from the server, OpenStream should be used.
-func (m *streamsMapLegacy) GetOrOpenStream(id protocol.StreamID) (streamI, error) {
+func (m *streamsMapLegacy) getOrOpenStream(id protocol.StreamID) (streamI, error) {
 	m.mutex.RLock()
 	s, ok := m.streams[id]
 	m.mutex.RUnlock()
@@ -128,7 +130,10 @@ func (m *streamsMapLegacy) openRemoteStream(id protocol.StreamID) (streamI, erro
 	if m.numIncomingStreams >= m.maxIncomingStreams {
 		return nil, qerr.TooManyOpenStreams
 	}
-	if id+protocol.MaxNewStreamIDDelta < m.highestStreamOpenedByPeer {
+	// maxNewStreamIDDelta is the maximum difference between and a newly opened Stream and the highest StreamID that a client has ever opened
+	// note that the number of streams is half this value, since the client can only open streams with open StreamID
+	maxStreamIDDelta := protocol.StreamID(4 * m.maxIncomingStreams)
+	if id+maxStreamIDDelta < m.highestStreamOpenedByPeer {
 		return nil, qerr.Error(qerr.InvalidStreamID, fmt.Sprintf("attempted to open stream %d, which is a lot smaller than the highest opened stream, %d", id, m.highestStreamOpenedByPeer))
 	}
 
@@ -182,6 +187,14 @@ func (m *streamsMapLegacy) OpenStreamSync() (Stream, error) {
 	}
 }
 
+func (m *streamsMapLegacy) OpenUniStream() (SendStream, error) {
+	return nil, errors.New("gQUIC doesn't support unidirectional streams")
+}
+
+func (m *streamsMapLegacy) OpenUniStreamSync() (SendStream, error) {
+	return nil, errors.New("gQUIC doesn't support unidirectional streams")
+}
+
 // AcceptStream returns the next stream opened by the peer
 // it blocks until a new stream is opened
 func (m *streamsMapLegacy) AcceptStream() (Stream, error) {
@@ -201,6 +214,10 @@ func (m *streamsMapLegacy) AcceptStream() (Stream, error) {
 	}
 	m.nextStreamToAccept += 2
 	return str, nil
+}
+
+func (m *streamsMapLegacy) AcceptUniStream() (ReceiveStream, error) {
+	return nil, errors.New("gQUIC doesn't support unidirectional streams")
 }
 
 func (m *streamsMapLegacy) DeleteStream(id protocol.StreamID) error {
@@ -252,4 +269,9 @@ func (m *streamsMapLegacy) UpdateLimits(params *handshake.TransportParameters) {
 	}
 	m.mutex.Unlock()
 	m.openStreamOrErrCond.Broadcast()
+}
+
+// should never be called, since MAX_STREAM_ID frames can only be unpacked for IETF QUIC
+func (m *streamsMapLegacy) HandleMaxStreamIDFrame(f *wire.MaxStreamIDFrame) error {
+	return errors.New("gQUIC doesn't have MAX_STREAM_ID frames")
 }

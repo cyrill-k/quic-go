@@ -52,7 +52,7 @@ func parseLegacyStreamFrame(r *bytes.Reader, _ protocol.VersionNumber) (*StreamF
 		}
 	}
 
-	// shortcut to prevent the unneccessary allocation of dataLen bytes
+	// shortcut to prevent the unnecessary allocation of dataLen bytes
 	// if the dataLen is larger than the remaining length of the packet
 	// reading the packet contents would result in EOF when attempting to READ
 	if int(dataLen) > r.Len() {
@@ -183,12 +183,24 @@ func (f *StreamFrame) getOffsetLength() protocol.ByteCount {
 	return 8
 }
 
-func (f *StreamFrame) minLengthLegacy(_ protocol.VersionNumber) protocol.ByteCount {
+func (f *StreamFrame) headerLengthLegacy(_ protocol.VersionNumber) protocol.ByteCount {
 	length := protocol.ByteCount(1) + protocol.ByteCount(f.calculateStreamIDLength()) + f.getOffsetLength()
 	if f.DataLenPresent {
 		length += 2
 	}
 	return length
+}
+
+func (f *StreamFrame) lengthLegacy(version protocol.VersionNumber) protocol.ByteCount {
+	return f.headerLengthLegacy(version) + f.DataLen()
+}
+
+func (f *StreamFrame) maxDataLenLegacy(maxFrameSize protocol.ByteCount, version protocol.VersionNumber) protocol.ByteCount {
+	headerLen := f.headerLengthLegacy(version)
+	if headerLen > maxFrameSize {
+		return 0
+	}
+	return maxFrameSize - headerLen
 }
 
 // DataLen gives the length of data in bytes

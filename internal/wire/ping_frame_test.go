@@ -12,13 +12,13 @@ var _ = Describe("PingFrame", func() {
 	Context("when parsing", func() {
 		It("accepts sample frame", func() {
 			b := bytes.NewReader([]byte{0x07})
-			_, err := ParsePingFrame(b, protocol.VersionWhatever)
+			_, err := parsePingFrame(b, protocol.VersionWhatever)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(b.Len()).To(BeZero())
 		})
 
 		It("errors on EOFs", func() {
-			_, err := ParsePingFrame(bytes.NewReader(nil), protocol.VersionWhatever)
+			_, err := parsePingFrame(bytes.NewReader(nil), protocol.VersionWhatever)
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -33,7 +33,7 @@ var _ = Describe("PingFrame", func() {
 
 		It("has the correct min length", func() {
 			frame := PingFrame{}
-			Expect(frame.MinLength(0)).To(Equal(protocol.ByteCount(1)))
+			Expect(frame.Length(0)).To(Equal(protocol.ByteCount(1)))
 		})
 	})
 })

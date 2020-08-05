@@ -13,8 +13,8 @@ type MaxStreamDataFrame struct {
 	ByteOffset protocol.ByteCount
 }
 
-// ParseMaxStreamDataFrame parses a MAX_STREAM_DATA frame
-func ParseMaxStreamDataFrame(r *bytes.Reader, version protocol.VersionNumber) (*MaxStreamDataFrame, error) {
+// parseMaxStreamDataFrame parses a MAX_STREAM_DATA frame
+func parseMaxStreamDataFrame(r *bytes.Reader, version protocol.VersionNumber) (*MaxStreamDataFrame, error) {
 	frame := &MaxStreamDataFrame{}
 
 	// read the TypeByte
@@ -50,8 +50,8 @@ func (f *MaxStreamDataFrame) Write(b *bytes.Buffer, version protocol.VersionNumb
 	return nil
 }
 
-// MinLength of a written frame
-func (f *MaxStreamDataFrame) MinLength(version protocol.VersionNumber) protocol.ByteCount {
+// Length of a written frame
+func (f *MaxStreamDataFrame) Length(version protocol.VersionNumber) protocol.ByteCount {
 	// writing this frame would result in a gQUIC WINDOW_UPDATE being written, which has a different length
 	if !version.UsesIETFFrameFormat() {
 		return 1 + 4 + 8

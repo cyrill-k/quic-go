@@ -27,8 +27,6 @@ import (
 )
 
 const (
-	nChromeRetries = 8
-
 	dataLen     = 500 * 1024       // 500 KB
 	dataLongLen = 50 * 1024 * 1024 // 50 MB
 )
@@ -36,7 +34,6 @@ const (
 var (
 	nFilesUploaded int32 // should be used atomically
 	doneCalled     utils.AtomicBool
-	version        protocol.VersionNumber
 )
 
 func TestChrome(t *testing.T) {
@@ -85,10 +82,6 @@ func init() {
 	})
 }
 
-var _ = JustBeforeEach(func() {
-	testserver.StartQuicServer([]protocol.VersionNumber{version})
-})
-
 var _ = AfterEach(func() {
 	testserver.StopQuicServer()
 
@@ -128,7 +121,7 @@ func chromeTest(version protocol.VersionNumber, url string, blockUntilDone func(
 		fmt.Sprintf("--quic-version=QUIC_VERSION_%s", version.ToAltSvc()),
 		url,
 	}
-	utils.Infof("Running chrome: %s '%s'", getChromePath(), strings.Join(args, "' '"))
+	utils.DefaultLogger.Infof("Running chrome: %s '%s'", getChromePath(), strings.Join(args, "' '"))
 	command := exec.Command(path, args...)
 	session, err := gexec.Start(command, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
