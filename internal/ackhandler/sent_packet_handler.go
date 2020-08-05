@@ -80,7 +80,7 @@ type sentPacketHandler struct {
 }
 
 // NewFlowteleSentPacketHandler creates a new sentPacketHandler using flowtele cubic
-func NewFlowteleSentPacketHandler(rttStats *congestion.RTTStats, flowteleSignalInterface *congestion.FlowteleSignalInterface) SentPacketHandler {
+func NewFlowteleSentPacketHandler(rttStats *congestion.RTTStats, logger utils.Logger, version protocol.VersionNumber, flowteleSignalInterface *congestion.FlowteleSignalInterface) SentPacketHandler {
 	congestion := congestion.NewFlowteleCubicSender(
 		congestion.DefaultClock{},
 		rttStats,
@@ -91,10 +91,12 @@ func NewFlowteleSentPacketHandler(rttStats *congestion.RTTStats, flowteleSignalI
 	)
 
 	return &sentPacketHandler{
-		packetHistory:      NewPacketList(),
+		packetHistory:      newSentPacketHistory(),
 		stopWaitingManager: stopWaitingManager{},
 		rttStats:           rttStats,
 		congestion:         congestion,
+		logger:             logger,
+		version:            version,
 	}
 }
 

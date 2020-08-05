@@ -42,6 +42,13 @@ type FlowteleCongestionControlModifier interface {
 }
 
 // FlowteleSendAlgorithmWithDebugInfo adds flowtele CC control functions to SendAlgorithmWithDebugInfo
+type FlowteleSendAlgorithm interface {
+	SendAlgorithm
+
+	FlowteleCongestionControlModifier
+}
+
+// FlowteleSendAlgorithmWithDebugInfo adds flowtele CC control functions to SendAlgorithmWithDebugInfo
 type FlowteleSendAlgorithmWithDebugInfo interface {
 	SendAlgorithmWithDebugInfo
 
