@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
-	"fmt"
 
 	"github.com/lucas-clemente/quic-go/internal/ackhandler"
 	"github.com/lucas-clemente/quic-go/internal/congestion"
@@ -20,12 +20,12 @@ import (
 	"github.com/lucas-clemente/quic-go/qerr"
 )
 
-func CreateFlowteleSignalInterface(newSrttMeasurement func(t time.Time, srtt time.Duration), packetsLost func(t time.Time, newSlowStartThreshold uint64), packetsAcked func(t time.Time, congestionWindow uint64, packetsInFlight uint64)) *congestion.FlowteleSignalInterface {
+func CreateFlowteleSignalInterface(newSrttMeasurement func(t time.Time, srtt time.Duration), packetsLost func(t time.Time, newSlowStartThreshold uint64), packetsAcked func(t time.Time, congestionWindow uint64, packetsInFlight uint64, ackedBytes uint64)) *congestion.FlowteleSignalInterface {
 	return &congestion.FlowteleSignalInterface{NewSrttMeasurement: newSrttMeasurement, PacketsLost: packetsLost, PacketsAcked: packetsAcked}
 }
 
 func createDummyFlowteleSignalInterface() *congestion.FlowteleSignalInterface {
-	return &congestion.FlowteleSignalInterface{NewSrttMeasurement: func(t time.Time, srtt time.Duration) {}, PacketsLost: func(t time.Time, newSlowStartThreshold uint64) {}, PacketsAcked: func(t time.Time, congestionWindow uint64, packetsInFlight uint64) {}}
+	return &congestion.FlowteleSignalInterface{NewSrttMeasurement: func(t time.Time, srtt time.Duration) {}, PacketsLost: func(t time.Time, newSlowStartThreshold uint64) {}, PacketsAcked: func(t time.Time, congestionWindow uint64, packetsInFlight uint64, ackedBytes uint64) {}}
 }
 
 type unpacker interface {
@@ -308,16 +308,16 @@ var newTLSClientSession = func(
 }
 
 func (s *session) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
-	return false
+	return s.sentPacketHandler.ApplyControl(beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
 }
 
 func (s *session) SetFixedRate(rateInBitsPerSecond uint64) {
-	fmt.Printf("SESSION: set fixed rate %f\n", float64(rateInBitsPerSecond)/1000000)
+	// fmt.Printf("SESSION: set fixed rate %f\n", float64(rateInBitsPerSecond)/1000000)
 	s.sentPacketHandler.SetFixedRate(congestion.Bandwidth(rateInBitsPerSecond))
 }
 
 func (s *session) preSetup() {
-	fmt.Printf("s.config.FlowteleSignalinterface = %+v\n", s.config.FlowteleSignalInterface)
+	// fmt.Printf("s.config.FlowteleSignalinterface = %+v\n", s.config.FlowteleSignalInterface)
 	s.rttStats = &congestion.RTTStats{FlowteleSignalInterface: s.config.FlowteleSignalInterface}
 	s.connFlowController = flowcontrol.NewConnectionFlowController(
 		protocol.ReceiveConnectionFlowControlWindow,

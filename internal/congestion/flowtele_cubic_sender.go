@@ -1,9 +1,9 @@
 package congestion
 
 import (
-	"time"
-	"math"
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/utils"
@@ -11,8 +11,8 @@ import (
 
 type FlowteleSignalInterface struct {
 	NewSrttMeasurement func(t time.Time, srtt time.Duration)
-	PacketsLost func(t time.Time, newSlowStartThreshold uint64)
-	PacketsAcked func(t time.Time, congestionWindow uint64, packetsInFlight uint64)
+	PacketsLost        func(t time.Time, newSlowStartThreshold uint64)
+	PacketsAcked       func(t time.Time, congestionWindow uint64, packetsInFlight uint64, ackedBytes uint64)
 }
 
 type flowteleCubicSender struct {
@@ -65,7 +65,7 @@ type flowteleCubicSender struct {
 	flowteleSignalInterface *FlowteleSignalInterface
 
 	useFixedBandwidth bool
-	fixedBandwidth Bandwidth
+	fixedBandwidth    Bandwidth
 }
 
 // NewCubicSender makes a new cubic sender
@@ -87,6 +87,10 @@ func NewFlowteleCubicSender(clock Clock, rttStats *RTTStats, reno bool, initialC
 
 func (c *flowteleCubicSender) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
 	fmt.Printf("FLOWTELE CC: ApplyControl(%f, %d, %d, %t)\n", beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
+	c.cubic.lastMaxCongestionWindowAddDelta = cwnd_max_adjust
+	c.cubic.cwndAddDelta = cwnd_adjust
+	c.cubic.betaValue = float32(beta)
+	c.cubic.isThirdPhaseValue = use_conservative_allocation
 	return true
 }
 
@@ -97,17 +101,29 @@ func (c *flowteleCubicSender) SetFixedRate(rateInBitsPerSecond Bandwidth) {
 }
 
 func (c *flowteleCubicSender) adjustCongestionWindow() {
-		// cwndAfterAck := c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT())
-		// cwndAfterAck += c.cwndAddDelta
-		// c.cwndAddDelta = 0
-		if c.useFixedBandwidth {
-			srtt := c.rttStats.SmoothedRTT()
-			// If we haven't measured an rtt, we cannot estimate the cwnd
-			if srtt != 0 {
-				c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, protocol.PacketNumber(math.Ceil(float64(DeltaBytesFromBandwidth(c.fixedBandwidth, srtt))/float64(protocol.DefaultTCPMSS))))
-				fmt.Printf("FLOWTELE CC: set congestion window to %d (%d), fixed bw = %d, srtt = %v\n", c.GetCongestionWindow(), c.congestionWindow, c.fixedBandwidth, srtt)
-			}
+	if c.useFixedBandwidth {
+		srtt := c.rttStats.SmoothedRTT()
+		// If we haven't measured an rtt, we cannot estimate the cwnd
+		if srtt != 0 {
+			c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, protocol.PacketNumber(math.Ceil(float64(DeltaBytesFromBandwidth(c.fixedBandwidth, srtt))/float64(protocol.DefaultTCPMSS))))
+			fmt.Printf("FLOWTELE CC: set congestion window to %d (%d), fixed bw = %d, srtt = %v\n", c.GetCongestionWindow(), c.congestionWindow, c.fixedBandwidth, srtt)
 		}
+	} else if c.cubic.cwndAddDelta != 0 {
+		c.congestionWindow = utils.MaxPacketNumber(
+			c.minCongestionWindow,
+			utils.MinPacketNumber(
+				c.maxTCPCongestionWindow,
+				protocol.PacketNumber(
+					math.Ceil(float64(
+						int64(c.congestionWindow)+int64(c.cubic.cwndAddDelta))/
+						float64(protocol.DefaultTCPMSS)))))
+		c.cubic.cwndAddDelta = 0
+	}
+
+	if c.cubic.isThirdPhaseValue {
+		c.cubic.CongestionWindowAfterPacketLoss(c.congestionWindow)
+		c.cubic.isThirdPhaseValue = false
+	}
 }
 
 func (c *flowteleCubicSender) slowStartthresholdUpdated() {
@@ -186,7 +202,7 @@ func (c *flowteleCubicSender) OnPacketAcked(ackedPacketNumber protocol.PacketNum
 		c.hybridSlowStart.OnPacketAcked(ackedPacketNumber)
 	}
 
-	c.flowteleSignalInterface.PacketsAcked(time.Now(), uint64(c.GetCongestionWindow()), uint64(bytesInFlight))
+	c.flowteleSignalInterface.PacketsAcked(time.Now(), uint64(c.GetCongestionWindow()), uint64(bytesInFlight), uint64(ackedBytes))
 }
 
 func (c *flowteleCubicSender) OnPacketLost(packetNumber protocol.PacketNumber, lostBytes protocol.ByteCount, bytesInFlight protocol.ByteCount) {
@@ -249,11 +265,11 @@ func (c *flowteleCubicSender) maybeIncreaseCwnd(ackedPacketNumber protocol.Packe
 	// the current window.
 	if !c.isCwndLimited(bytesInFlight) {
 		c.cubic.OnApplicationLimited()
-		fmt.Println("FLOWTELE CC: application limited")
-		// c.adjustCongestionWindow()
+		// fmt.Println("FLOWTELE CC: application limited")
+		c.adjustCongestionWindow()
 		return
 	}
-	fmt.Println("FLOWTELE CC: cwnd limited")
+	// fmt.Println("FLOWTELE CC: cwnd limited")
 	if c.congestionWindow >= c.maxTCPCongestionWindow {
 		return
 	}
@@ -273,16 +289,7 @@ func (c *flowteleCubicSender) maybeIncreaseCwnd(ackedPacketNumber protocol.Packe
 		}
 	} else {
 		c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT()))
-		// cwndAfterAck := c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT())
-		// cwndAfterAck += c.cwndAddDelta
-		// c.cwndAddDelta = 0
 		c.adjustCongestionWindow()
-					
-
-
-		// if c.isThirdPhaseValue {
-		//     c.cubic.CongestionWindowAfterPacketLoss
-		// }
 	}
 }
 

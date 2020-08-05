@@ -37,9 +37,10 @@ type FlowteleCubic struct {
 	// Last congestion window in packets computed by cubic function.
 	lastTargetCongestionWindow protocol.PacketNumber
 
+	betaRaw                         float32
 	lastMaxCongestionWindowAddDelta int16
 	cwndAddDelta                    int16
-	betaLastMaxNewValue             float32
+	betaValue                       float32
 	isThirdPhaseValue               bool
 	// compare to netlink / tcp cubic c implementation: http://www.yonch.com/tech/linux-tcp-congestion-control-internals
 	// ssthresh: called from tcp_init_cwnd_reduction and tcp_enter_loss
@@ -56,6 +57,19 @@ func NewFlowteleCubic(clock Clock) *FlowteleCubic {
 	}
 	c.Reset()
 	return c
+}
+
+func (c *FlowteleCubic) adjustBeta() {
+	c.betaRaw = c.betaValue
+}
+
+func (c *FlowteleCubic) betaLastMax() float32 {
+	return 1 - (1-c.betaRaw)/2
+}
+
+func (c *FlowteleCubic) adjustLastMaxCongestionWindow() {
+	c.lastMaxCongestionWindow = protocol.PacketNumber(int64(c.lastMaxCongestionWindow) + int64(c.lastMaxCongestionWindowAddDelta))
+	c.lastMaxCongestionWindowAddDelta = 0
 }
 
 // Reset is called after a timeout to reset the cubic state
@@ -76,8 +90,10 @@ func (c *FlowteleCubic) alpha() float32 {
 	// TCPFriendly alpha is described in Section 3.3 of the CUBIC paper. Note that
 	// beta here is a cwnd multiplier, and is equal to 1-beta from the paper.
 	// We derive the equivalent alpha for an N-connection emulation as:
-	b := c.beta()
-	return 3 * float32(c.numConnections) * float32(c.numConnections) * (1 - b) / (1 + b)
+	// b := c.beta()
+	// flowtele uses the hardcoded default beta value for the TCP fairness calculations
+	b := 0.7
+	return 3 * float32(c.numConnections) * float32(c.numConnections) * float32(1-b) / float32(1+b)
 }
 
 func (c *FlowteleCubic) beta() float32 {
@@ -85,7 +101,7 @@ func (c *FlowteleCubic) beta() float32 {
 	// emulation, which emulates the effective backoff of an ensemble of N
 	// TCP-Reno connections on a single loss event. The effective multiplier is
 	// computed as:
-	return (float32(c.numConnections) - 1 + beta) / float32(c.numConnections)
+	return (float32(c.numConnections) - 1 + c.betaRaw) / float32(c.numConnections)
 }
 
 // OnApplicationLimited is called on ack arrival when sender is unable to use
@@ -109,20 +125,18 @@ func (c *FlowteleCubic) OnApplicationLimited() {
 // a loss event. Returns the new congestion window in packets. The new
 // congestion window is a multiplicative decrease of our current window.
 func (c *FlowteleCubic) CongestionWindowAfterPacketLoss(currentCongestionWindow protocol.PacketNumber) protocol.PacketNumber {
-	// c.betaLastMax = c.betaLastMaxNewValue
-	// we probably need to change c.beta() as well
+	c.adjustBeta()
 
 	if currentCongestionWindow < c.lastMaxCongestionWindow {
 		// We never reached the old max, so assume we are competing with another
 		// flow. Use our extra back off factor to allow the other flow to go up.
-		c.lastMaxCongestionWindow = protocol.PacketNumber(betaLastMax * float32(currentCongestionWindow))
+		c.lastMaxCongestionWindow = protocol.PacketNumber(c.betaLastMax() * float32(currentCongestionWindow))
 	} else {
 		c.lastMaxCongestionWindow = currentCongestionWindow
 	}
 	c.epoch = time.Time{} // Reset time.
 
-	// c.lastMaxCongestionWindow += c.lastMaxCongestionWindowAddDelta
-	// c.lastMaxCongestionWindowAddDelta = 0
+	c.adjustLastMaxCongestionWindow()
 
 	return protocol.PacketNumber(float32(currentCongestionWindow) * c.beta())
 }
