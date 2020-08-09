@@ -145,7 +145,7 @@ type session struct {
 	version        protocol.VersionNumber
 	config         *Config
 
-	conn      connection
+	conn      sendConn
 	sendQueue *sendQueue
 
 	streamsMap      streamManager
@@ -224,7 +224,7 @@ var _ EarlySession = &session{}
 var _ streamSender = &session{}
 
 var newSession = func(
-	conn connection,
+	conn sendConn,
 	runner sessionRunner,
 	origDestConnID protocol.ConnectionID,
 	retrySrcConnID *protocol.ConnectionID,
@@ -352,7 +352,7 @@ var newSession = func(
 
 // declare this as a variable, such that we can it mock it in the tests
 var newClientSession = func(
-	conn connection,
+	conn sendConn,
 	runner sessionRunner,
 	destConnID protocol.ConnectionID,
 	srcConnID protocol.ConnectionID,
