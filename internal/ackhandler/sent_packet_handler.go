@@ -120,7 +120,7 @@ func NewSentPacketHandler(rttStats *congestion.RTTStats, logger utils.Logger, ve
 	}
 }
 
-func (s *sentPacketHandler) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
+func (s *sentPacketHandler) ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool {
 	return s.congestion.(congestion.FlowteleSendAlgorithmWithDebugInfo).ApplyControl(beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
 }
 

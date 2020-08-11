@@ -36,7 +36,7 @@ type SendAlgorithmWithDebugInfo interface {
 }
 
 type FlowteleCongestionControlModifier interface {
-	ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool
+	ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool
 
 	SetFixedRate(rateInBytePerSecond Bandwidth)
 }

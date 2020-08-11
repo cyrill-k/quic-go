@@ -90,7 +90,7 @@ func NewFlowteleCubicSender(clock Clock, rttStats *RTTStats, reno bool, initialC
 	}
 }
 
-func (c *flowteleCubicSender) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
+func (c *flowteleCubicSender) ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool {
 	fmt.Printf("FLOWTELE CC: ApplyControl(%f, %d, %d, %t)\n", beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
 	c.cubic.lastMaxCongestionWindowAddDelta = cwnd_max_adjust
 	c.cubic.cwndAddDelta = cwnd_adjust
@@ -118,7 +118,7 @@ func (c *flowteleCubicSender) adjustCongestionWindow() {
 			c.minCongestionWindow,
 			utils.MinByteCount(
 				c.maxCongestionWindow,
-				protocol.ByteCount(int64(c.congestionWindow)+int64(c.cubic.cwndAddDelta))))
+				protocol.ByteCount(int64(c.congestionWindow)+c.cubic.cwndAddDelta)))
 		c.cubic.cwndAddDelta = 0
 	}
 

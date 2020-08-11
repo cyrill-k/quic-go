@@ -422,7 +422,7 @@ var newTLSClientSession = func(
 	return s, s.postSetup()
 }
 
-func (s *session) ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool {
+func (s *session) ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool {
 	return s.sentPacketHandler.ApplyControl(beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
 }
 

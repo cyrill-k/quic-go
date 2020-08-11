@@ -40,8 +40,8 @@ type FlowteleCubic struct {
 
 	betaRaw                         float32
 	betaLastMaxRaw                  float32
-	lastMaxCongestionWindowAddDelta int16
-	cwndAddDelta                    int16
+	lastMaxCongestionWindowAddDelta int64
+	cwndAddDelta                    int64
 	betaValue                       float32
 	isThirdPhaseValue               bool
 	// compare to netlink / tcp cubic c implementation: http://www.yonch.com/tech/linux-tcp-congestion-control-internals
@@ -67,7 +67,7 @@ func (c *FlowteleCubic) adjustBeta() {
 }
 
 func (c *FlowteleCubic) adjustLastMaxCongestionWindow() {
-	c.lastMaxCongestionWindow = protocol.ByteCount(int64(c.lastMaxCongestionWindow) + int64(c.lastMaxCongestionWindowAddDelta))
+	c.lastMaxCongestionWindow = protocol.ByteCount(int64(c.lastMaxCongestionWindow) + c.lastMaxCongestionWindowAddDelta)
 	c.lastMaxCongestionWindowAddDelta = 0
 }
 

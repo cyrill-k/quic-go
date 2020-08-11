@@ -6,9 +6,9 @@ import (
 	"net"
 	"time"
 
+	"github.com/lucas-clemente/quic-go/internal/congestion"
 	"github.com/lucas-clemente/quic-go/internal/handshake"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
-	"github.com/lucas-clemente/quic-go/internal/congestion"
 )
 
 // The StreamID is the ID of a QUIC stream.
@@ -160,7 +160,7 @@ type Session interface {
 	// Warning: This API should not be considered stable and might change soon.
 	ConnectionState() ConnectionState
 
-	ApplyControl(beta float64, cwnd_adjust int16, cwnd_max_adjust int16, use_conservative_allocation bool) bool
+	ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool
 
 	SetFixedRate(rateInBytePerSecond uint64)
 }
