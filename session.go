@@ -1535,6 +1535,7 @@ func (s *session) sendProbePacket(encLevel protocol.EncryptionLevel) error {
 		}
 	}
 	if packet == nil {
+		//nolint:exhaustive // Cannot send probe packets for 0-RTT.
 		switch encLevel {
 		case protocol.EncryptionInitial:
 			s.retransmissionQueue.AddInitial(&wire.PingFrame{})
