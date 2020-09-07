@@ -19,6 +19,7 @@ type Packet struct {
 	SendTime        time.Time
 
 	includedInBytesInFlight bool
+	declaredLost            bool
 }
 
 // SentPacketHandler handles ACKs received for outgoing packets
