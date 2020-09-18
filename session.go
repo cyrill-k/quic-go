@@ -433,7 +433,7 @@ func (s *session) SetFixedRate(rateInBitsPerSecond uint64) {
 
 func (s *session) preSetup() {
 	s.rttStats = &congestion.RTTStats{FlowteleSignalInterface: s.config.FlowteleSignalInterface}
-	fmt.Printf("creating SentPacketHandler, config = %+v\n", s.config)
+	// fmt.Printf("creating SentPacketHandler, config = %+v\n", s.config)
 	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats)
 	s.sentPacketHandler = ackhandler.NewFlowteleSentPacketHandler(s.rttStats, s.logger, s.version, s.config.FlowteleSignalInterface)
 	// s.sentPacketHandler = ackhandler.NewSentPacketHandler(s.rttStats, s.logger, s.version)
