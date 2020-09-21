@@ -2,6 +2,7 @@ package quicproxy
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"runtime/pprof"
 	"strconv"
@@ -9,10 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"fmt"
-
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/wire"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
@@ -22,13 +22,15 @@ type packetData []byte
 var _ = Describe("QUIC Proxy", func() {
 	makePacket := func(p protocol.PacketNumber, payload []byte) []byte {
 		b := &bytes.Buffer{}
-		hdr := wire.Header{
-			PacketNumber:     p,
-			PacketNumberLen:  protocol.PacketNumberLen6,
-			DestConnectionID: protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
-			SrcConnectionID:  protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
+		hdr := wire.ExtendedHeader{
+			Header: wire.Header{
+				DestConnectionID: protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
+				SrcConnectionID:  protocol.ConnectionID{0xde, 0xad, 0xbe, 0xef, 0, 0, 0x13, 0x37},
+			},
+			PacketNumber:    p,
+			PacketNumberLen: protocol.PacketNumberLen4,
 		}
-		hdr.Write(b, protocol.PerspectiveServer, protocol.VersionWhatever)
+		Expect(hdr.Write(b, protocol.VersionWhatever)).To(Succeed())
 		raw := b.Bytes()
 		raw = append(raw, payload...)
 		return raw
@@ -36,7 +38,7 @@ var _ = Describe("QUIC Proxy", func() {
 
 	Context("Proxy setup and teardown", func() {
 		It("sets up the UDPProxy", func() {
-			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, nil)
+			proxy, err := NewQuicProxy("localhost:0", nil)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proxy.clientDict).To(HaveLen(0))
 
@@ -55,7 +57,7 @@ var _ = Describe("QUIC Proxy", func() {
 				return strings.Contains(b.String(), "proxy.(*QuicProxy).runProxy")
 			}
 
-			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, nil)
+			proxy, err := NewQuicProxy("localhost:0", nil)
 			Expect(err).ToNot(HaveOccurred())
 			port := proxy.LocalPort()
 			Expect(isProxyRunning()).To(BeTrue())
@@ -90,7 +92,7 @@ var _ = Describe("QUIC Proxy", func() {
 			Expect(err).ToNot(HaveOccurred())
 			defer serverConn.Close()
 
-			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, &Opts{RemoteAddr: serverConn.LocalAddr().String()})
+			proxy, err := NewQuicProxy("localhost:0", &Opts{RemoteAddr: serverConn.LocalAddr().String()})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(isConnRunning()).To(BeFalse())
 
@@ -105,7 +107,7 @@ var _ = Describe("QUIC Proxy", func() {
 		})
 
 		It("has the correct LocalAddr and LocalPort", func() {
-			proxy, err := NewQuicProxy("localhost:0", protocol.VersionWhatever, nil)
+			proxy, err := NewQuicProxy("localhost:0", nil)
 			Expect(err).ToNot(HaveOccurred())
 
 			Expect(proxy.LocalAddr().String()).To(Equal("127.0.0.1:" + strconv.Itoa(proxy.LocalPort())))
@@ -122,28 +124,19 @@ var _ = Describe("QUIC Proxy", func() {
 			serverReceivedPackets chan packetData
 			clientConn            *net.UDPConn
 			proxy                 *QuicProxy
+			stoppedReading        chan struct{}
 		)
 
 		startProxy := func(opts *Opts) {
 			var err error
-			proxy, err = NewQuicProxy("localhost:0", protocol.VersionWhatever, opts)
+			proxy, err = NewQuicProxy("localhost:0", opts)
 			Expect(err).ToNot(HaveOccurred())
 			clientConn, err = net.DialUDP("udp", nil, proxy.LocalAddr().(*net.UDPAddr))
 			Expect(err).ToNot(HaveOccurred())
 		}
 
-		// getClientDict returns a copy of the clientDict map
-		getClientDict := func() map[string]*connection {
-			d := make(map[string]*connection)
-			proxy.mutex.Lock()
-			defer proxy.mutex.Unlock()
-			for k, v := range proxy.clientDict {
-				d[k] = v
-			}
-			return d
-		}
-
 		BeforeEach(func() {
+			stoppedReading = make(chan struct{})
 			serverReceivedPackets = make(chan packetData, 100)
 			atomic.StoreInt32(&serverNumPacketsSent, 0)
 
@@ -155,6 +148,8 @@ var _ = Describe("QUIC Proxy", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			go func() {
+				defer GinkgoRecover()
+				defer close(stoppedReading)
 				for {
 					buf := make([]byte, protocol.MaxReceivePacketSize)
 					// the ReadFromUDP will error as soon as the UDP conn is closed
@@ -165,20 +160,17 @@ var _ = Describe("QUIC Proxy", func() {
 					data := buf[0:n]
 					serverReceivedPackets <- packetData(data)
 					// echo the packet
-					serverConn.WriteToUDP(data, addr)
 					atomic.AddInt32(&serverNumPacketsSent, 1)
+					serverConn.WriteToUDP(data, addr)
 				}
 			}()
 		})
 
 		AfterEach(func() {
-			err := proxy.Close()
-			Expect(err).ToNot(HaveOccurred())
-			err = serverConn.Close()
-			Expect(err).ToNot(HaveOccurred())
-			err = clientConn.Close()
-			Expect(err).ToNot(HaveOccurred())
-			time.Sleep(200 * time.Millisecond)
+			Expect(proxy.Close()).To(Succeed())
+			Expect(serverConn.Close()).To(Succeed())
+			Expect(clientConn.Close()).To(Succeed())
+			Eventually(stoppedReading).Should(BeClosed())
 		})
 
 		Context("no packet drop", func() {
@@ -188,18 +180,11 @@ var _ = Describe("QUIC Proxy", func() {
 				_, err := clientConn.Write(makePacket(1, []byte("foobar")))
 				Expect(err).ToNot(HaveOccurred())
 
-				Eventually(getClientDict).Should(HaveLen(1))
-				var conn *connection
-				for _, conn = range getClientDict() {
-					Eventually(func() uint64 { return atomic.LoadUint64(&conn.incomingPacketCounter) }).Should(Equal(uint64(1)))
-				}
-
 				// send the second packet
 				_, err = clientConn.Write(makePacket(2, []byte("decafbad")))
 				Expect(err).ToNot(HaveOccurred())
 
 				Eventually(serverReceivedPackets).Should(HaveLen(2))
-				Expect(getClientDict()).To(HaveLen(1))
 				Expect(string(<-serverReceivedPackets)).To(ContainSubstring("foobar"))
 				Expect(string(<-serverReceivedPackets)).To(ContainSubstring("decafbad"))
 			})
@@ -210,22 +195,9 @@ var _ = Describe("QUIC Proxy", func() {
 				_, err := clientConn.Write(makePacket(1, []byte("foobar")))
 				Expect(err).ToNot(HaveOccurred())
 
-				Eventually(getClientDict).Should(HaveLen(1))
-				var key string
-				var conn *connection
-				for key, conn = range getClientDict() {
-					Eventually(func() uint64 { return atomic.LoadUint64(&conn.outgoingPacketCounter) }).Should(Equal(uint64(1)))
-				}
-
 				// send the second packet
 				_, err = clientConn.Write(makePacket(2, []byte("decafbad")))
 				Expect(err).ToNot(HaveOccurred())
-
-				Expect(getClientDict()).To(HaveLen(1))
-				Eventually(func() uint64 {
-					conn := getClientDict()[key]
-					return atomic.LoadUint64(&conn.outgoingPacketCounter)
-				}).Should(BeEquivalentTo(2))
 
 				clientReceivedPackets := make(chan packetData, 2)
 				// receive the packets echoed by the server on client side
@@ -252,10 +224,14 @@ var _ = Describe("QUIC Proxy", func() {
 
 		Context("Drop Callbacks", func() {
 			It("drops incoming packets", func() {
+				var counter int32
 				opts := &Opts{
 					RemoteAddr: serverConn.LocalAddr().String(),
-					DropPacket: func(d Direction, p uint64) bool {
-						return d == DirectionIncoming && p%2 == 0
+					DropPacket: func(d Direction, _ []byte) bool {
+						if d != DirectionIncoming {
+							return false
+						}
+						return atomic.AddInt32(&counter, 1)%2 == 1
 					},
 				}
 				startProxy(opts)
@@ -270,10 +246,14 @@ var _ = Describe("QUIC Proxy", func() {
 
 			It("drops outgoing packets", func() {
 				const numPackets = 6
+				var counter int32
 				opts := &Opts{
 					RemoteAddr: serverConn.LocalAddr().String(),
-					DropPacket: func(d Direction, p uint64) bool {
-						return d == DirectionOutgoing && p%2 == 0
+					DropPacket: func(d Direction, _ []byte) bool {
+						if d != DirectionOutgoing {
+							return false
+						}
+						return atomic.AddInt32(&counter, 1)%2 == 1
 					},
 				}
 				startProxy(opts)
@@ -314,15 +294,17 @@ var _ = Describe("QUIC Proxy", func() {
 
 			It("delays incoming packets", func() {
 				delay := 300 * time.Millisecond
+				var counter int32
 				opts := &Opts{
 					RemoteAddr: serverConn.LocalAddr().String(),
 					// delay packet 1 by 200 ms
 					// delay packet 2 by 400 ms
 					// ...
-					DelayPacket: func(d Direction, p uint64) time.Duration {
+					DelayPacket: func(d Direction, _ []byte) time.Duration {
 						if d == DirectionOutgoing {
 							return 0
 						}
+						p := atomic.AddInt32(&counter, 1)
 						return time.Duration(p) * delay
 					},
 				}
@@ -345,15 +327,17 @@ var _ = Describe("QUIC Proxy", func() {
 			It("delays outgoing packets", func() {
 				const numPackets = 3
 				delay := 300 * time.Millisecond
+				var counter int32
 				opts := &Opts{
 					RemoteAddr: serverConn.LocalAddr().String(),
 					// delay packet 1 by 200 ms
 					// delay packet 2 by 400 ms
 					// ...
-					DelayPacket: func(d Direction, p uint64) time.Duration {
+					DelayPacket: func(d Direction, _ []byte) time.Duration {
 						if d == DirectionIncoming {
 							return 0
 						}
+						p := atomic.AddInt32(&counter, 1)
 						return time.Duration(p) * delay
 					},
 				}

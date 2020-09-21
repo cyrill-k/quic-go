@@ -23,6 +23,7 @@ var _ = Describe("Connection Flow controller", func() {
 	}
 
 	BeforeEach(func() {
+		queuedWindowUpdate = false
 		controller = &connectionFlowController{}
 		controller.rttStats = &congestion.RTTStats{}
 		controller.logger = utils.DefaultLogger
@@ -58,14 +59,13 @@ var _ = Describe("Connection Flow controller", func() {
 			})
 
 			It("queues window updates", func() {
-				controller.MaybeQueueWindowUpdate()
+				controller.AddBytesRead(1)
 				Expect(queuedWindowUpdate).To(BeFalse())
-				controller.AddBytesRead(30)
-				controller.MaybeQueueWindowUpdate()
+				controller.AddBytesRead(29)
 				Expect(queuedWindowUpdate).To(BeTrue())
 				Expect(controller.GetWindowUpdate()).ToNot(BeZero())
 				queuedWindowUpdate = false
-				controller.MaybeQueueWindowUpdate()
+				controller.AddBytesRead(1)
 				Expect(queuedWindowUpdate).To(BeFalse())
 			})
 
@@ -75,7 +75,7 @@ var _ = Describe("Connection Flow controller", func() {
 				dataRead := windowSize/2 - 1 // make sure not to trigger auto-tuning
 				controller.AddBytesRead(dataRead)
 				offset := controller.GetWindowUpdate()
-				Expect(offset).To(Equal(protocol.ByteCount(oldOffset + dataRead + 60)))
+				Expect(offset).To(Equal(oldOffset + dataRead + 60))
 			})
 
 			It("autotunes the window", func() {
@@ -90,7 +90,7 @@ var _ = Describe("Connection Flow controller", func() {
 				offset := controller.GetWindowUpdate()
 				newWindowSize := controller.receiveWindowSize
 				Expect(newWindowSize).To(Equal(2 * oldWindowSize))
-				Expect(offset).To(Equal(protocol.ByteCount(oldOffset + dataRead + newWindowSize)))
+				Expect(offset).To(Equal(oldOffset + dataRead + newWindowSize))
 			})
 		})
 	})

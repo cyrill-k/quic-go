@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/md5"
 	"errors"
 	"flag"
@@ -10,17 +11,18 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"path"
-	"runtime"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 
 	_ "net/http/pprof"
 
-	quic "github.com/lucas-clemente/quic-go"
-	"github.com/lucas-clemente/quic-go/h2quic"
-	"github.com/lucas-clemente/quic-go/internal/protocol"
+	"github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go/http3"
+	"github.com/lucas-clemente/quic-go/internal/testdata"
 	"github.com/lucas-clemente/quic-go/internal/utils"
+	"github.com/lucas-clemente/quic-go/quictrace"
 )
 
 type binds []string
@@ -39,8 +41,74 @@ type Size interface {
 	Size() int64
 }
 
+// See https://en.wikipedia.org/wiki/Lehmer_random_number_generator
+func generatePRData(l int) []byte {
+	res := make([]byte, l)
+	seed := uint64(1)
+	for i := 0; i < l; i++ {
+		seed = seed * 48271 % 2147483647
+		res[i] = byte(seed)
+	}
+	return res
+}
+
+var tracer quictrace.Tracer
+
 func init() {
-	http.HandleFunc("/demo/tile", func(w http.ResponseWriter, r *http.Request) {
+	tracer = quictrace.NewTracer()
+}
+
+func exportTraces() error {
+	traces := tracer.GetAllTraces()
+	if len(traces) != 1 {
+		return errors.New("expected exactly one trace")
+	}
+	for _, trace := range traces {
+		f, err := os.Create("trace.qtr")
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(trace); err != nil {
+			return err
+		}
+		f.Close()
+		fmt.Println("Wrote trace to", f.Name())
+	}
+	return nil
+}
+
+type tracingHandler struct {
+	handler http.Handler
+}
+
+var _ http.Handler = &tracingHandler{}
+
+func (h *tracingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.handler.ServeHTTP(w, r)
+	if err := exportTraces(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func setupHandler(www string, trace bool) http.Handler {
+	mux := http.NewServeMux()
+
+	if len(www) > 0 {
+		mux.Handle("/", http.FileServer(http.Dir(www)))
+	} else {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Printf("%#v\n", r)
+			const maxSize = 1 << 30 // 1 GB
+			num, err := strconv.ParseInt(strings.ReplaceAll(r.RequestURI, "/", ""), 10, 64)
+			if err != nil || num <= 0 || num > maxSize {
+				w.WriteHeader(400)
+				return
+			}
+			w.Write(generatePRData(int(num)))
+		})
+	}
+
+	mux.HandleFunc("/demo/tile", func(w http.ResponseWriter, r *http.Request) {
 		// Small 40x40 png
 		w.Write([]byte{
 			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
@@ -53,7 +121,7 @@ func init() {
 		})
 	})
 
-	http.HandleFunc("/demo/tiles", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/demo/tiles", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "<html><head><style>img{width:40px;height:40px;}</style></head><body>")
 		for i := 0; i < 200; i++ {
 			fmt.Fprintf(w, `<img src="/demo/tile?cachebust=%d">`, i)
@@ -61,7 +129,7 @@ func init() {
 		io.WriteString(w, "</body></html>")
 	})
 
-	http.HandleFunc("/demo/echo", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/demo/echo", func(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			fmt.Printf("error reading body while handling /echo: %s\n", err.Error())
@@ -71,7 +139,7 @@ func init() {
 
 	// accept file uploads and return the MD5 of the uploaded file
 	// maximum accepted file size is 1 GB
-	http.HandleFunc("/demo/upload", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/demo/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			err := r.ParseMultipartForm(1 << 30) // 1 GB
 			if err == nil {
@@ -99,15 +167,11 @@ func init() {
 				<input type="submit">
 			</form></body></html>`)
 	})
-}
 
-func getBuildDir() string {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("Failed to get current frame")
+	if !trace {
+		return mux
 	}
-
-	return path.Dir(filename)
+	return &tracingHandler{handler: mux}
 }
 
 func main() {
@@ -120,10 +184,10 @@ func main() {
 	verbose := flag.Bool("v", false, "verbose")
 	bs := binds{}
 	flag.Var(&bs, "bind", "bind to")
-	certPath := flag.String("certpath", getBuildDir(), "certificate directory")
-	www := flag.String("www", "/var/www", "www data")
+	www := flag.String("www", "", "www data")
 	tcp := flag.Bool("tcp", false, "also listen on TCP")
-	tls := flag.Bool("tls", false, "activate support for IETF QUIC (work in progress)")
+	trace := flag.Bool("trace", false, "enable quic-trace")
+	qlog := flag.Bool("qlog", false, "output a qlog (in the same directory)")
 	flag.Parse()
 
 	logger := utils.DefaultLogger
@@ -135,18 +199,25 @@ func main() {
 	}
 	logger.SetLogTimeFormat("")
 
-	versions := protocol.SupportedVersions
-	if *tls {
-		versions = append([]protocol.VersionNumber{protocol.VersionTLS}, versions...)
-	}
-
-	certFile := *certPath + "/fullchain.pem"
-	keyFile := *certPath + "/privkey.pem"
-
-	http.Handle("/", http.FileServer(http.Dir(*www)))
-
 	if len(bs) == 0 {
 		bs = binds{"localhost:6121"}
+	}
+
+	handler := setupHandler(*www, *trace)
+	quicConf := &quic.Config{}
+	if *trace {
+		quicConf.QuicTracer = tracer
+	}
+	if *qlog {
+		quicConf.GetLogWriter = func(connID []byte) io.WriteCloser {
+			filename := fmt.Sprintf("server_%x.qlog", connID)
+			f, err := os.Create(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Creating qlog file %s.\n", filename)
+			return utils.NewBufferedWriteCloser(bufio.NewWriter(f), f)
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -156,13 +227,14 @@ func main() {
 		go func() {
 			var err error
 			if *tcp {
-				err = h2quic.ListenAndServe(bCap, certFile, keyFile, nil)
+				certFile, keyFile := testdata.GetCertificatePaths()
+				err = http3.ListenAndServe(bCap, certFile, keyFile, nil)
 			} else {
-				server := h2quic.Server{
-					Server:     &http.Server{Addr: bCap},
-					QuicConfig: &quic.Config{Versions: versions},
+				server := http3.Server{
+					Server:     &http.Server{Handler: handler, Addr: bCap},
+					QuicConfig: quicConf,
 				}
-				err = server.ListenAndServeTLS(certFile, keyFile)
+				err = server.ListenAndServeTLS(testdata.GetCertificatePaths())
 			}
 			if err != nil {
 				fmt.Println(err)

@@ -12,6 +12,7 @@ import (
 )
 
 // on the CIs, the timing is a lot less precise, so scale every duration by this factor
+//nolint:unparam
 func scaleDuration(t time.Duration) time.Duration {
 	scaleFactor := 1
 	if f, err := strconv.Atoi(os.Getenv("TIMESCALE_FACTOR")); err == nil { // parsing "" errors, so this works fine if the env is not set
@@ -144,7 +145,7 @@ var _ = Describe("Base Flow controller", func() {
 
 			It("doesn't increase the window size when no RTT estimate is available", func() {
 				setRtt(0)
-				controller.startNewAutoTuningEpoch()
+				controller.startNewAutoTuningEpoch(time.Now())
 				controller.AddBytesRead(400)
 				offset := controller.getWindowUpdate()
 				Expect(offset).ToNot(BeZero()) // make sure a window update is sent
@@ -167,7 +168,7 @@ var _ = Describe("Base Flow controller", func() {
 				newWindowSize := controller.receiveWindowSize
 				Expect(newWindowSize).To(Equal(2 * oldWindowSize))
 				// check that the new window size was used to increase the offset
-				Expect(offset).To(Equal(protocol.ByteCount(bytesRead + dataRead + newWindowSize)))
+				Expect(offset).To(Equal(bytesRead + dataRead + newWindowSize))
 			})
 
 			It("doesn't increase the window size if data is read so fast that the window would be consumed in less than 4 RTTs, but less than half the window has been read", func() {
@@ -188,7 +189,7 @@ var _ = Describe("Base Flow controller", func() {
 				newWindowSize := controller.receiveWindowSize
 				Expect(newWindowSize).To(Equal(oldWindowSize))
 				// check that the new window size was used to increase the offset
-				Expect(offset).To(Equal(protocol.ByteCount(bytesRead + dataRead + newWindowSize)))
+				Expect(offset).To(Equal(bytesRead + dataRead + newWindowSize))
 			})
 
 			It("doesn't increase the window size if read too slowly", func() {
@@ -206,7 +207,7 @@ var _ = Describe("Base Flow controller", func() {
 				// check that the window size was not increased
 				Expect(controller.receiveWindowSize).To(Equal(oldWindowSize))
 				// check that the new window size was used to increase the offset
-				Expect(offset).To(Equal(protocol.ByteCount(bytesRead + dataRead + oldWindowSize)))
+				Expect(offset).To(Equal(bytesRead + dataRead + oldWindowSize))
 			})
 
 			It("doesn't increase the window size to a value higher than the maxReceiveWindowSize", func() {

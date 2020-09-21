@@ -3,6 +3,7 @@ package congestion
 import (
 	"time"
 
+	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -37,12 +38,6 @@ var _ = Describe("RTT stats", func() {
 		Expect(rttStats.SmoothedRTT()).To(Equal((287500 * time.Microsecond)))
 	})
 
-	It("SmoothedOrInitialRTT", func() {
-		Expect(rttStats.SmoothedOrInitialRTT()).To(Equal(defaultInitialRTT))
-		rttStats.UpdateRTT((300 * time.Millisecond), (100 * time.Millisecond), time.Time{})
-		Expect(rttStats.SmoothedOrInitialRTT()).To(Equal((300 * time.Millisecond)))
-	})
-
 	It("MinRTT", func() {
 		rttStats.UpdateRTT((200 * time.Millisecond), 0, time.Time{})
 		Expect(rttStats.MinRTT()).To(Equal((200 * time.Millisecond)))
@@ -57,6 +52,28 @@ var _ = Describe("RTT stats", func() {
 		// Verify that ack_delay does not go into recording of MinRTT_.
 		rttStats.UpdateRTT((7 * time.Millisecond), (2 * time.Millisecond), time.Time{}.Add((50 * time.Millisecond)))
 		Expect(rttStats.MinRTT()).To(Equal((7 * time.Millisecond)))
+	})
+
+	It("MaxAckDelay", func() {
+		rttStats.SetMaxAckDelay(42 * time.Minute)
+		Expect(rttStats.MaxAckDelay()).To(Equal(42 * time.Minute))
+	})
+
+	It("computes the PTO", func() {
+		maxAckDelay := 42 * time.Minute
+		rttStats.SetMaxAckDelay(maxAckDelay)
+		rtt := time.Second
+		rttStats.UpdateRTT(rtt, 0, time.Time{})
+		Expect(rttStats.SmoothedRTT()).To(Equal(rtt))
+		Expect(rttStats.MeanDeviation()).To(Equal(rtt / 2))
+		Expect(rttStats.PTO(false)).To(Equal(rtt + 4*(rtt/2)))
+		Expect(rttStats.PTO(true)).To(Equal(rtt + 4*(rtt/2) + maxAckDelay))
+	})
+
+	It("uses the granularity for computing the PTO for short RTTs", func() {
+		rtt := time.Microsecond
+		rttStats.UpdateRTT(rtt, 0, time.Time{})
+		Expect(rttStats.PTO(true)).To(Equal(rtt + protocol.TimerGranularity))
 	})
 
 	It("ExpireSmoothedMetrics", func() {
@@ -112,7 +129,7 @@ var _ = Describe("RTT stats", func() {
 	})
 
 	It("ResetAfterConnectionMigrations", func() {
-		rttStats.UpdateRTT((200 * time.Millisecond), 0, time.Time{})
+		rttStats.UpdateRTT(200*time.Millisecond, 0, time.Time{})
 		Expect(rttStats.LatestRTT()).To(Equal((200 * time.Millisecond)))
 		Expect(rttStats.SmoothedRTT()).To(Equal((200 * time.Millisecond)))
 		Expect(rttStats.MinRTT()).To(Equal((200 * time.Millisecond)))
@@ -128,4 +145,15 @@ var _ = Describe("RTT stats", func() {
 		Expect(rttStats.MinRTT()).To(Equal(time.Duration(0)))
 	})
 
+	It("restores the RTT", func() {
+		rttStats.SetInitialRTT(10 * time.Second)
+		Expect(rttStats.LatestRTT()).To(Equal(10 * time.Second))
+		Expect(rttStats.SmoothedRTT()).To(Equal(10 * time.Second))
+		Expect(rttStats.MeanDeviation()).To(BeZero())
+		// update the RTT and make sure that the initial value is immediately forgotten
+		rttStats.UpdateRTT(200*time.Millisecond, 0, time.Time{})
+		Expect(rttStats.LatestRTT()).To(Equal(200 * time.Millisecond))
+		Expect(rttStats.SmoothedRTT()).To(Equal(200 * time.Millisecond))
+		Expect(rttStats.MeanDeviation()).To(Equal(100 * time.Millisecond))
+	})
 })

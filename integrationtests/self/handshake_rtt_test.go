@@ -1,34 +1,36 @@
 package self_test
 
 import (
+	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
-	"github.com/lucas-clemente/quic-go/integrationtests/tools/proxy"
+	quicproxy "github.com/lucas-clemente/quic-go/integrationtests/tools/proxy"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
-	"github.com/lucas-clemente/quic-go/qerr"
 
-	"github.com/lucas-clemente/quic-go/internal/testdata"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("Handshake RTT tests", func() {
 	var (
-		proxy         *quicproxy.QuicProxy
-		server        quic.Listener
-		serverConfig  *quic.Config
-		testStartedAt time.Time
-		acceptStopped chan struct{}
+		proxy           *quicproxy.QuicProxy
+		server          quic.Listener
+		serverConfig    *quic.Config
+		serverTLSConfig *tls.Config
+		testStartedAt   time.Time
+		acceptStopped   chan struct{}
 	)
 
 	rtt := 400 * time.Millisecond
 
 	BeforeEach(func() {
 		acceptStopped = make(chan struct{})
-		serverConfig = &quic.Config{}
+		serverConfig = getQuicConfigForServer(nil)
+		serverTLSConfig = getTLSConfig()
 	})
 
 	AfterEach(func() {
@@ -40,12 +42,12 @@ var _ = Describe("Handshake RTT tests", func() {
 	runServerAndProxy := func() {
 		var err error
 		// start the server
-		server, err = quic.ListenAddr("localhost:0", testdata.GetTLSConfig(), serverConfig)
+		server, err = quic.ListenAddr("localhost:0", serverTLSConfig, serverConfig)
 		Expect(err).ToNot(HaveOccurred())
 		// start the proxy
-		proxy, err = quicproxy.NewQuicProxy("localhost:0", protocol.VersionWhatever, &quicproxy.Opts{
+		proxy, err = quicproxy.NewQuicProxy("localhost:0", &quicproxy.Opts{
 			RemoteAddr:  server.Addr().String(),
-			DelayPacket: func(_ quicproxy.Direction, _ uint64) time.Duration { return rtt / 2 },
+			DelayPacket: func(_ quicproxy.Direction, _ []byte) time.Duration { return rtt / 2 },
 		})
 		Expect(err).ToNot(HaveOccurred())
 
@@ -55,8 +57,7 @@ var _ = Describe("Handshake RTT tests", func() {
 			defer GinkgoRecover()
 			defer close(acceptStopped)
 			for {
-				_, err := server.Accept()
-				if err != nil {
+				if _, err := server.Accept(context.Background()); err != nil {
 					return
 				}
 			}
@@ -78,136 +79,80 @@ var _ = Describe("Handshake RTT tests", func() {
 		}
 		serverConfig.Versions = protocol.SupportedVersions[:1]
 		runServerAndProxy()
-		clientConfig := &quic.Config{
-			Versions: protocol.SupportedVersions[1:2],
-		}
-		_, err := quic.DialAddr(proxy.LocalAddr().String(), nil, clientConfig)
+		clientConfig := getQuicConfigForClient(&quic.Config{Versions: protocol.SupportedVersions[1:2]})
+		_, err := quic.DialAddr(
+			proxy.LocalAddr().String(),
+			getTLSClientConfig(),
+			clientConfig,
+		)
 		Expect(err).To(HaveOccurred())
-		Expect(err.(qerr.ErrorCode)).To(Equal(qerr.InvalidVersion))
+		// Expect(err.(qerr.ErrorCode)).To(Equal(qerr.InvalidVersion))
 		expectDurationInRTTs(1)
 	})
 
-	Context("gQUIC", func() {
-		// 1 RTT for verifying the source address
-		// 1 RTT to become secure
-		// 1 RTT to become forward-secure
-		It("is forward-secure after 3 RTTs", func() {
-			runServerAndProxy()
-			_, err := quic.DialAddr(proxy.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(3)
-		})
+	var clientConfig *quic.Config
 
-		It("does version negotiation in 1 RTT, IETF QUIC => gQUIC", func() {
-			clientConfig := &quic.Config{
-				Versions: []protocol.VersionNumber{protocol.VersionTLS, protocol.SupportedVersions[0]},
-			}
-			runServerAndProxy()
-			_, err := quic.DialAddr(
-				proxy.LocalAddr().String(),
-				&tls.Config{InsecureSkipVerify: true},
-				clientConfig,
-			)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(4)
-		})
-
-		It("is forward-secure after 2 RTTs when the server doesn't require a Cookie", func() {
-			serverConfig.AcceptCookie = func(_ net.Addr, _ *quic.Cookie) bool {
-				return true
-			}
-			runServerAndProxy()
-			_, err := quic.DialAddr(proxy.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(2)
-		})
-
-		It("doesn't complete the handshake when the server never accepts the Cookie", func() {
-			serverConfig.AcceptCookie = func(_ net.Addr, _ *quic.Cookie) bool {
-				return false
-			}
-			runServerAndProxy()
-			_, err := quic.DialAddr(proxy.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
-			Expect(err).To(HaveOccurred())
-			Expect(err.(*qerr.QuicError).ErrorCode).To(Equal(qerr.CryptoTooManyRejects))
-		})
-
-		It("doesn't complete the handshake when the handshake timeout is too short", func() {
-			serverConfig.HandshakeTimeout = 2 * rtt
-			runServerAndProxy()
-			_, err := quic.DialAddr(proxy.LocalAddr().String(), &tls.Config{InsecureSkipVerify: true}, nil)
-			Expect(err).To(HaveOccurred())
-			Expect(err.(*qerr.QuicError).ErrorCode).To(Equal(qerr.HandshakeTimeout))
-			// 2 RTTs during the timeout
-			// plus 1 RTT: the timer starts 0.5 RTTs after sending the first packet, and the CONNECTION_CLOSE needs another 0.5 RTTs to reach the client
-			expectDurationInRTTs(3)
-		})
+	BeforeEach(func() {
+		serverConfig.Versions = []protocol.VersionNumber{protocol.VersionTLS}
+		clientConfig = getQuicConfigForClient(&quic.Config{Versions: []protocol.VersionNumber{protocol.VersionTLS}})
+		clientConfig := getTLSClientConfig()
+		clientConfig.InsecureSkipVerify = true
 	})
 
-	Context("IETF QUIC", func() {
-		var clientConfig *quic.Config
-		var clientTLSConfig *tls.Config
+	// 1 RTT for verifying the source address
+	// 1 RTT for the TLS handshake
+	It("is forward-secure after 2 RTTs", func() {
+		runServerAndProxy()
+		_, err := quic.DialAddr(
+			fmt.Sprintf("localhost:%d", proxy.LocalAddr().(*net.UDPAddr).Port),
+			getTLSClientConfig(),
+			clientConfig,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		expectDurationInRTTs(2)
+	})
 
-		BeforeEach(func() {
-			serverConfig.Versions = []protocol.VersionNumber{protocol.VersionTLS}
-			clientConfig = &quic.Config{Versions: []protocol.VersionNumber{protocol.VersionTLS}}
-			clientTLSConfig = &tls.Config{
-				InsecureSkipVerify: true,
-				ServerName:         "quic.clemente.io",
-			}
-		})
+	It("establishes a connection in 1 RTT when the server doesn't require a token", func() {
+		serverConfig.AcceptToken = func(_ net.Addr, _ *quic.Token) bool {
+			return true
+		}
+		runServerAndProxy()
+		_, err := quic.DialAddr(
+			fmt.Sprintf("localhost:%d", proxy.LocalAddr().(*net.UDPAddr).Port),
+			getTLSClientConfig(),
+			clientConfig,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		expectDurationInRTTs(1)
+	})
 
-		// 1 RTT for verifying the source address
-		// 1 RTT for the TLS handshake
-		It("is forward-secure after 2 RTTs", func() {
-			runServerAndProxy()
-			_, err := quic.DialAddr(
-				proxy.LocalAddr().String(),
-				clientTLSConfig,
-				clientConfig,
-			)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(2)
-		})
+	It("establishes a connection in 2 RTTs if a HelloRetryRequest is performed", func() {
+		serverConfig.AcceptToken = func(_ net.Addr, _ *quic.Token) bool {
+			return true
+		}
+		serverTLSConfig.CurvePreferences = []tls.CurveID{tls.CurveP384}
+		runServerAndProxy()
+		_, err := quic.DialAddr(
+			fmt.Sprintf("localhost:%d", proxy.LocalAddr().(*net.UDPAddr).Port),
+			getTLSClientConfig(),
+			clientConfig,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		expectDurationInRTTs(2)
+	})
 
-		It("does version negotiation in 1 RTT, gQUIC => IETF QUIC", func() {
-			clientConfig.Versions = []protocol.VersionNumber{protocol.SupportedVersions[0], protocol.VersionTLS}
-			runServerAndProxy()
-			_, err := quic.DialAddr(
-				proxy.LocalAddr().String(),
-				clientTLSConfig,
-				clientConfig,
-			)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(3)
-		})
-
-		It("is forward-secure after 1 RTTs when the server doesn't require a Cookie", func() {
-			serverConfig.AcceptCookie = func(_ net.Addr, _ *quic.Cookie) bool {
-				return true
-			}
-			runServerAndProxy()
-			_, err := quic.DialAddr(
-				proxy.LocalAddr().String(),
-				clientTLSConfig,
-				clientConfig,
-			)
-			Expect(err).ToNot(HaveOccurred())
-			expectDurationInRTTs(1)
-		})
-
-		It("doesn't complete the handshake when the server never accepts the Cookie", func() {
-			serverConfig.AcceptCookie = func(_ net.Addr, _ *quic.Cookie) bool {
-				return false
-			}
-			runServerAndProxy()
-			_, err := quic.DialAddr(
-				proxy.LocalAddr().String(),
-				clientTLSConfig,
-				clientConfig,
-			)
-			Expect(err).To(HaveOccurred())
-			Expect(err.(qerr.ErrorCode)).To(Equal(qerr.CryptoTooManyRejects))
-		})
+	It("doesn't complete the handshake when the server never accepts the token", func() {
+		serverConfig.AcceptToken = func(_ net.Addr, _ *quic.Token) bool {
+			return false
+		}
+		clientConfig.HandshakeTimeout = 500 * time.Millisecond
+		runServerAndProxy()
+		_, err := quic.DialAddr(
+			fmt.Sprintf("localhost:%d", proxy.LocalAddr().(*net.UDPAddr).Port),
+			getTLSClientConfig(),
+			clientConfig,
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("Handshake did not complete in time"))
 	})
 })

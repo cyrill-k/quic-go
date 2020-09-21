@@ -1,38 +1,30 @@
 package self_test
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net"
-	"os"
+	"runtime"
 	"time"
 
 	quic "github.com/lucas-clemente/quic-go"
-	"github.com/lucas-clemente/quic-go/integrationtests/tools/testlog"
-	"github.com/lucas-clemente/quic-go/integrationtests/tools/testserver"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
-	"github.com/lucas-clemente/quic-go/internal/testdata"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("Multiplexing", func() {
-	for _, v := range append(protocol.SupportedVersions, protocol.VersionTLS) {
+	for _, v := range protocol.SupportedVersions {
 		version := v
-
-		// gQUIC 44 uses 0 byte connection IDs for packets sent to the client
-		// It's not possible to do demultiplexing.
-		if v == protocol.Version44 {
-			continue
-		}
 
 		Context(fmt.Sprintf("with QUIC version %s", version), func() {
 			runServer := func(ln quic.Listener) {
 				go func() {
 					defer GinkgoRecover()
 					for {
-						sess, err := ln.Accept()
+						sess, err := ln.Accept(context.Background())
 						if err != nil {
 							return
 						}
@@ -41,7 +33,7 @@ var _ = Describe("Multiplexing", func() {
 							str, err := sess.OpenStream()
 							Expect(err).ToNot(HaveOccurred())
 							defer str.Close()
-							_, err = str.Write(testserver.PRDataLong)
+							_, err = str.Write(PRData)
 							Expect(err).ToNot(HaveOccurred())
 						}()
 					}
@@ -52,24 +44,25 @@ var _ = Describe("Multiplexing", func() {
 				sess, err := quic.Dial(
 					conn,
 					addr,
-					fmt.Sprintf("quic.clemente.io:%d", addr.(*net.UDPAddr).Port),
-					nil,
-					&quic.Config{Versions: []protocol.VersionNumber{version}},
+					fmt.Sprintf("localhost:%d", addr.(*net.UDPAddr).Port),
+					getTLSClientConfig(),
+					getQuicConfigForClient(&quic.Config{Versions: []protocol.VersionNumber{version}}),
 				)
 				Expect(err).ToNot(HaveOccurred())
-				str, err := sess.AcceptStream()
+				defer sess.CloseWithError(0, "")
+				str, err := sess.AcceptStream(context.Background())
 				Expect(err).ToNot(HaveOccurred())
 				data, err := ioutil.ReadAll(str)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(data).To(Equal(testserver.PRDataLong))
+				Expect(data).To(Equal(PRData))
 			}
 
 			Context("multiplexing clients on the same conn", func() {
 				getListener := func() quic.Listener {
 					ln, err := quic.ListenAddr(
 						"localhost:0",
-						testdata.GetTLSConfig(),
-						&quic.Config{Versions: []protocol.VersionNumber{version}},
+						getTLSConfig(),
+						getQuicConfigForServer(&quic.Config{Versions: []protocol.VersionNumber{version}}),
 					)
 					Expect(err).ToNot(HaveOccurred())
 					return ln
@@ -99,7 +92,7 @@ var _ = Describe("Multiplexing", func() {
 						close(done2)
 					}()
 					timeout := 30 * time.Second
-					if testlog.Debug() {
+					if debugLog() {
 						timeout = time.Minute
 					}
 					Eventually(done1, timeout).Should(BeClosed())
@@ -133,7 +126,7 @@ var _ = Describe("Multiplexing", func() {
 						close(done2)
 					}()
 					timeout := 30 * time.Second
-					if testlog.Debug() {
+					if debugLog() {
 						timeout = time.Minute
 					}
 					Eventually(done1, timeout).Should(BeClosed())
@@ -143,10 +136,6 @@ var _ = Describe("Multiplexing", func() {
 
 			Context("multiplexing server and client on the same conn", func() {
 				It("connects to itself", func() {
-					if version != protocol.VersionTLS {
-						Skip("Connecting to itself only works with IETF QUIC.")
-					}
-
 					addr, err := net.ResolveUDPAddr("udp", "localhost:0")
 					Expect(err).ToNot(HaveOccurred())
 					conn, err := net.ListenUDP("udp", addr)
@@ -155,8 +144,8 @@ var _ = Describe("Multiplexing", func() {
 
 					server, err := quic.Listen(
 						conn,
-						testdata.GetTLSConfig(),
-						&quic.Config{Versions: []protocol.VersionNumber{version}},
+						getTLSConfig(),
+						getQuicConfigForServer(&quic.Config{Versions: []protocol.VersionNumber{version}}),
 					)
 					Expect(err).ToNot(HaveOccurred())
 					runServer(server)
@@ -167,15 +156,15 @@ var _ = Describe("Multiplexing", func() {
 						close(done)
 					}()
 					timeout := 30 * time.Second
-					if testlog.Debug() {
+					if debugLog() {
 						timeout = time.Minute
 					}
 					Eventually(done, timeout).Should(BeClosed())
 				})
 
 				It("runs a server and client on the same conn", func() {
-					if os.Getenv("CI") == "true" {
-						Skip("This test is flaky on CIs, see see https://github.com/golang/go/issues/17677.")
+					if runtime.GOOS == "linux" {
+						Skip("This test would require setting of iptables rules, see https://stackoverflow.com/questions/23859164/linux-udp-socket-sendto-operation-not-permitted.")
 					}
 					addr1, err := net.ResolveUDPAddr("udp", "localhost:0")
 					Expect(err).ToNot(HaveOccurred())
@@ -191,8 +180,8 @@ var _ = Describe("Multiplexing", func() {
 
 					server1, err := quic.Listen(
 						conn1,
-						testdata.GetTLSConfig(),
-						&quic.Config{Versions: []protocol.VersionNumber{version}},
+						getTLSConfig(),
+						getQuicConfigForServer(&quic.Config{Versions: []protocol.VersionNumber{version}}),
 					)
 					Expect(err).ToNot(HaveOccurred())
 					runServer(server1)
@@ -200,8 +189,8 @@ var _ = Describe("Multiplexing", func() {
 
 					server2, err := quic.Listen(
 						conn2,
-						testdata.GetTLSConfig(),
-						&quic.Config{Versions: []protocol.VersionNumber{version}},
+						getTLSConfig(),
+						getQuicConfigForServer(&quic.Config{Versions: []protocol.VersionNumber{version}}),
 					)
 					Expect(err).ToNot(HaveOccurred())
 					runServer(server2)
@@ -220,7 +209,7 @@ var _ = Describe("Multiplexing", func() {
 						close(done2)
 					}()
 					timeout := 30 * time.Second
-					if testlog.Debug() {
+					if debugLog() {
 						timeout = time.Minute
 					}
 					Eventually(done1, timeout).Should(BeClosed())

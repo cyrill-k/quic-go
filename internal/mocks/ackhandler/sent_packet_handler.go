@@ -12,6 +12,7 @@ import (
 	ackhandler "github.com/lucas-clemente/quic-go/internal/ackhandler"
 	protocol "github.com/lucas-clemente/quic-go/internal/protocol"
 	wire "github.com/lucas-clemente/quic-go/internal/wire"
+	quictrace "github.com/lucas-clemente/quic-go/quictrace"
 )
 
 // MockSentPacketHandler is a mock of SentPacketHandler interface
@@ -37,105 +38,160 @@ func (m *MockSentPacketHandler) EXPECT() *MockSentPacketHandlerMockRecorder {
 	return m.recorder
 }
 
-// DequeuePacketForRetransmission mocks base method
-func (m *MockSentPacketHandler) DequeuePacketForRetransmission() *ackhandler.Packet {
-	ret := m.ctrl.Call(m, "DequeuePacketForRetransmission")
-	ret0, _ := ret[0].(*ackhandler.Packet)
+// AmplificationWindow mocks base method
+func (m *MockSentPacketHandler) AmplificationWindow() protocol.ByteCount {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AmplificationWindow")
+	ret0, _ := ret[0].(protocol.ByteCount)
 	return ret0
 }
 
-// DequeuePacketForRetransmission indicates an expected call of DequeuePacketForRetransmission
-func (mr *MockSentPacketHandlerMockRecorder) DequeuePacketForRetransmission() *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DequeuePacketForRetransmission", reflect.TypeOf((*MockSentPacketHandler)(nil).DequeuePacketForRetransmission))
+// AmplificationWindow indicates an expected call of AmplificationWindow
+func (mr *MockSentPacketHandlerMockRecorder) AmplificationWindow() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AmplificationWindow", reflect.TypeOf((*MockSentPacketHandler)(nil).AmplificationWindow))
 }
 
-// DequeueProbePacket mocks base method
-func (m *MockSentPacketHandler) DequeueProbePacket() (*ackhandler.Packet, error) {
-	ret := m.ctrl.Call(m, "DequeueProbePacket")
-	ret0, _ := ret[0].(*ackhandler.Packet)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+// DropPackets mocks base method
+func (m *MockSentPacketHandler) DropPackets(arg0 protocol.EncryptionLevel) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "DropPackets", arg0)
 }
 
-// DequeueProbePacket indicates an expected call of DequeueProbePacket
-func (mr *MockSentPacketHandlerMockRecorder) DequeueProbePacket() *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DequeueProbePacket", reflect.TypeOf((*MockSentPacketHandler)(nil).DequeueProbePacket))
+// DropPackets indicates an expected call of DropPackets
+func (mr *MockSentPacketHandlerMockRecorder) DropPackets(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DropPackets", reflect.TypeOf((*MockSentPacketHandler)(nil).DropPackets), arg0)
 }
 
-// GetAlarmTimeout mocks base method
-func (m *MockSentPacketHandler) GetAlarmTimeout() time.Time {
-	ret := m.ctrl.Call(m, "GetAlarmTimeout")
+// GetLossDetectionTimeout mocks base method
+func (m *MockSentPacketHandler) GetLossDetectionTimeout() time.Time {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLossDetectionTimeout")
 	ret0, _ := ret[0].(time.Time)
 	return ret0
 }
 
-// GetAlarmTimeout indicates an expected call of GetAlarmTimeout
-func (mr *MockSentPacketHandlerMockRecorder) GetAlarmTimeout() *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAlarmTimeout", reflect.TypeOf((*MockSentPacketHandler)(nil).GetAlarmTimeout))
+// GetLossDetectionTimeout indicates an expected call of GetLossDetectionTimeout
+func (mr *MockSentPacketHandlerMockRecorder) GetLossDetectionTimeout() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLossDetectionTimeout", reflect.TypeOf((*MockSentPacketHandler)(nil).GetLossDetectionTimeout))
 }
 
-// GetLowestPacketNotConfirmedAcked mocks base method
-func (m *MockSentPacketHandler) GetLowestPacketNotConfirmedAcked() protocol.PacketNumber {
-	ret := m.ctrl.Call(m, "GetLowestPacketNotConfirmedAcked")
-	ret0, _ := ret[0].(protocol.PacketNumber)
+// GetStats mocks base method
+func (m *MockSentPacketHandler) GetStats() *quictrace.TransportState {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStats")
+	ret0, _ := ret[0].(*quictrace.TransportState)
 	return ret0
 }
 
-// GetLowestPacketNotConfirmedAcked indicates an expected call of GetLowestPacketNotConfirmedAcked
-func (mr *MockSentPacketHandlerMockRecorder) GetLowestPacketNotConfirmedAcked() *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLowestPacketNotConfirmedAcked", reflect.TypeOf((*MockSentPacketHandler)(nil).GetLowestPacketNotConfirmedAcked))
+// GetStats indicates an expected call of GetStats
+func (mr *MockSentPacketHandlerMockRecorder) GetStats() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStats", reflect.TypeOf((*MockSentPacketHandler)(nil).GetStats))
 }
 
-// GetPacketNumberLen mocks base method
-func (m *MockSentPacketHandler) GetPacketNumberLen(arg0 protocol.PacketNumber) protocol.PacketNumberLen {
-	ret := m.ctrl.Call(m, "GetPacketNumberLen", arg0)
-	ret0, _ := ret[0].(protocol.PacketNumberLen)
-	return ret0
-}
-
-// GetPacketNumberLen indicates an expected call of GetPacketNumberLen
-func (mr *MockSentPacketHandlerMockRecorder) GetPacketNumberLen(arg0 interface{}) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPacketNumberLen", reflect.TypeOf((*MockSentPacketHandler)(nil).GetPacketNumberLen), arg0)
-}
-
-// GetStopWaitingFrame mocks base method
-func (m *MockSentPacketHandler) GetStopWaitingFrame(arg0 bool) *wire.StopWaitingFrame {
-	ret := m.ctrl.Call(m, "GetStopWaitingFrame", arg0)
-	ret0, _ := ret[0].(*wire.StopWaitingFrame)
-	return ret0
-}
-
-// GetStopWaitingFrame indicates an expected call of GetStopWaitingFrame
-func (mr *MockSentPacketHandlerMockRecorder) GetStopWaitingFrame(arg0 interface{}) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStopWaitingFrame", reflect.TypeOf((*MockSentPacketHandler)(nil).GetStopWaitingFrame), arg0)
-}
-
-// OnAlarm mocks base method
-func (m *MockSentPacketHandler) OnAlarm() error {
-	ret := m.ctrl.Call(m, "OnAlarm")
+// OnLossDetectionTimeout mocks base method
+func (m *MockSentPacketHandler) OnLossDetectionTimeout() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "OnLossDetectionTimeout")
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// OnAlarm indicates an expected call of OnAlarm
-func (mr *MockSentPacketHandlerMockRecorder) OnAlarm() *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OnAlarm", reflect.TypeOf((*MockSentPacketHandler)(nil).OnAlarm))
+// OnLossDetectionTimeout indicates an expected call of OnLossDetectionTimeout
+func (mr *MockSentPacketHandlerMockRecorder) OnLossDetectionTimeout() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OnLossDetectionTimeout", reflect.TypeOf((*MockSentPacketHandler)(nil).OnLossDetectionTimeout))
+}
+
+// PeekPacketNumber mocks base method
+func (m *MockSentPacketHandler) PeekPacketNumber(arg0 protocol.EncryptionLevel) (protocol.PacketNumber, protocol.PacketNumberLen) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PeekPacketNumber", arg0)
+	ret0, _ := ret[0].(protocol.PacketNumber)
+	ret1, _ := ret[1].(protocol.PacketNumberLen)
+	return ret0, ret1
+}
+
+// PeekPacketNumber indicates an expected call of PeekPacketNumber
+func (mr *MockSentPacketHandlerMockRecorder) PeekPacketNumber(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PeekPacketNumber", reflect.TypeOf((*MockSentPacketHandler)(nil).PeekPacketNumber), arg0)
+}
+
+// PopPacketNumber mocks base method
+func (m *MockSentPacketHandler) PopPacketNumber(arg0 protocol.EncryptionLevel) protocol.PacketNumber {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PopPacketNumber", arg0)
+	ret0, _ := ret[0].(protocol.PacketNumber)
+	return ret0
+}
+
+// PopPacketNumber indicates an expected call of PopPacketNumber
+func (mr *MockSentPacketHandlerMockRecorder) PopPacketNumber(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PopPacketNumber", reflect.TypeOf((*MockSentPacketHandler)(nil).PopPacketNumber), arg0)
+}
+
+// QueueProbePacket mocks base method
+func (m *MockSentPacketHandler) QueueProbePacket(arg0 protocol.EncryptionLevel) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "QueueProbePacket", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// QueueProbePacket indicates an expected call of QueueProbePacket
+func (mr *MockSentPacketHandlerMockRecorder) QueueProbePacket(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QueueProbePacket", reflect.TypeOf((*MockSentPacketHandler)(nil).QueueProbePacket), arg0)
 }
 
 // ReceivedAck mocks base method
-func (m *MockSentPacketHandler) ReceivedAck(arg0 *wire.AckFrame, arg1 protocol.PacketNumber, arg2 protocol.EncryptionLevel, arg3 time.Time) error {
-	ret := m.ctrl.Call(m, "ReceivedAck", arg0, arg1, arg2, arg3)
+func (m *MockSentPacketHandler) ReceivedAck(arg0 *wire.AckFrame, arg1 protocol.EncryptionLevel, arg2 time.Time) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReceivedAck", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // ReceivedAck indicates an expected call of ReceivedAck
-func (mr *MockSentPacketHandlerMockRecorder) ReceivedAck(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReceivedAck", reflect.TypeOf((*MockSentPacketHandler)(nil).ReceivedAck), arg0, arg1, arg2, arg3)
+func (mr *MockSentPacketHandlerMockRecorder) ReceivedAck(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReceivedAck", reflect.TypeOf((*MockSentPacketHandler)(nil).ReceivedAck), arg0, arg1, arg2)
+}
+
+// ReceivedBytes mocks base method
+func (m *MockSentPacketHandler) ReceivedBytes(arg0 protocol.ByteCount) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ReceivedBytes", arg0)
+}
+
+// ReceivedBytes indicates an expected call of ReceivedBytes
+func (mr *MockSentPacketHandlerMockRecorder) ReceivedBytes(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReceivedBytes", reflect.TypeOf((*MockSentPacketHandler)(nil).ReceivedBytes), arg0)
+}
+
+// ResetForRetry mocks base method
+func (m *MockSentPacketHandler) ResetForRetry() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResetForRetry")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ResetForRetry indicates an expected call of ResetForRetry
+func (mr *MockSentPacketHandlerMockRecorder) ResetForRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetForRetry", reflect.TypeOf((*MockSentPacketHandler)(nil).ResetForRetry))
 }
 
 // SendMode mocks base method
 func (m *MockSentPacketHandler) SendMode() ackhandler.SendMode {
+	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SendMode")
 	ret0, _ := ret[0].(ackhandler.SendMode)
 	return ret0
@@ -143,41 +199,37 @@ func (m *MockSentPacketHandler) SendMode() ackhandler.SendMode {
 
 // SendMode indicates an expected call of SendMode
 func (mr *MockSentPacketHandlerMockRecorder) SendMode() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMode", reflect.TypeOf((*MockSentPacketHandler)(nil).SendMode))
 }
 
 // SentPacket mocks base method
 func (m *MockSentPacketHandler) SentPacket(arg0 *ackhandler.Packet) {
+	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SentPacket", arg0)
 }
 
 // SentPacket indicates an expected call of SentPacket
 func (mr *MockSentPacketHandlerMockRecorder) SentPacket(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SentPacket", reflect.TypeOf((*MockSentPacketHandler)(nil).SentPacket), arg0)
-}
-
-// SentPacketsAsRetransmission mocks base method
-func (m *MockSentPacketHandler) SentPacketsAsRetransmission(arg0 []*ackhandler.Packet, arg1 protocol.PacketNumber) {
-	m.ctrl.Call(m, "SentPacketsAsRetransmission", arg0, arg1)
-}
-
-// SentPacketsAsRetransmission indicates an expected call of SentPacketsAsRetransmission
-func (mr *MockSentPacketHandlerMockRecorder) SentPacketsAsRetransmission(arg0, arg1 interface{}) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SentPacketsAsRetransmission", reflect.TypeOf((*MockSentPacketHandler)(nil).SentPacketsAsRetransmission), arg0, arg1)
 }
 
 // SetHandshakeComplete mocks base method
 func (m *MockSentPacketHandler) SetHandshakeComplete() {
+	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SetHandshakeComplete")
 }
 
 // SetHandshakeComplete indicates an expected call of SetHandshakeComplete
 func (mr *MockSentPacketHandlerMockRecorder) SetHandshakeComplete() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetHandshakeComplete", reflect.TypeOf((*MockSentPacketHandler)(nil).SetHandshakeComplete))
 }
 
 // ShouldSendNumPackets mocks base method
 func (m *MockSentPacketHandler) ShouldSendNumPackets() int {
+	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ShouldSendNumPackets")
 	ret0, _ := ret[0].(int)
 	return ret0
@@ -185,11 +237,13 @@ func (m *MockSentPacketHandler) ShouldSendNumPackets() int {
 
 // ShouldSendNumPackets indicates an expected call of ShouldSendNumPackets
 func (mr *MockSentPacketHandlerMockRecorder) ShouldSendNumPackets() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ShouldSendNumPackets", reflect.TypeOf((*MockSentPacketHandler)(nil).ShouldSendNumPackets))
 }
 
 // TimeUntilSend mocks base method
 func (m *MockSentPacketHandler) TimeUntilSend() time.Time {
+	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "TimeUntilSend")
 	ret0, _ := ret[0].(time.Time)
 	return ret0
@@ -197,5 +251,6 @@ func (m *MockSentPacketHandler) TimeUntilSend() time.Time {
 
 // TimeUntilSend indicates an expected call of TimeUntilSend
 func (mr *MockSentPacketHandlerMockRecorder) TimeUntilSend() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TimeUntilSend", reflect.TypeOf((*MockSentPacketHandler)(nil).TimeUntilSend))
 }
