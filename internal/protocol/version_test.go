@@ -20,7 +20,6 @@ var _ = Describe("Version", func() {
 
 	It("versions don't have reserved version numbers", func() {
 		Expect(isReservedVersion(VersionTLS)).To(BeFalse())
-		Expect(isReservedVersion(VersionMilestone0_10_0)).To(BeFalse())
 	})
 
 	It("has the right string representation", func() {
