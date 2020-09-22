@@ -3,6 +3,7 @@ package ackhandler
 import (
 	"time"
 
+	"github.com/lucas-clemente/quic-go/internal/congestion"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/wire"
 	"github.com/lucas-clemente/quic-go/quictrace"
@@ -51,6 +52,10 @@ type SentPacketHandler interface {
 
 	// report some congestion statistics. For tracing only.
 	GetStats() *quictrace.TransportState
+
+	ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool
+
+	SetFixedRate(rateInBitsPerSecond congestion.Bandwidth)
 }
 
 type sentPacketTracker interface {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/lucas-clemente/quic-go/internal/congestion"
 	"github.com/lucas-clemente/quic-go/internal/handshake"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/logging"
@@ -190,6 +191,10 @@ type Session interface {
 	// It blocks until the handshake completes.
 	// Warning: This API should not be considered stable and might change soon.
 	ConnectionState() ConnectionState
+
+	ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool
+
+	SetFixedRate(rateInBytePerSecond uint64)
 }
 
 // An EarlySession is a session that is handshaking.
@@ -267,6 +272,13 @@ type Config struct {
 	// It is disabled by default. Use the "quictrace" build tag to enable (e.g. go build -tags quictrace).
 	QuicTracer quictrace.Tracer
 	Tracer     logging.Tracer
+	// GetLogWriter is used to pass in a writer for the qlog.
+	// If it is nil, no qlog will be collected and exported.
+	// If it returns nil, no qlog will be collected and exported for the respective connection.
+	// It is recommended to use a buffered writer here.
+	GetLogWriter func(connectionID []byte) io.WriteCloser
+
+	FlowteleSignalInterface *congestion.FlowteleSignalInterface
 }
 
 // A Listener for incoming QUIC connections

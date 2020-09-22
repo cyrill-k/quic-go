@@ -25,6 +25,8 @@ type RTTStats struct {
 	meanDeviation time.Duration
 
 	maxAckDelay time.Duration
+
+	FlowteleSignalInterface *FlowteleSignalInterface
 }
 
 // NewRTTStats makes a properly initialized RTTStats object
@@ -93,6 +95,9 @@ func (r *RTTStats) UpdateRTT(sendDelta, ackDelay time.Duration, now time.Time) {
 		r.meanDeviation = time.Duration(oneMinusBeta*float32(r.meanDeviation/time.Microsecond)+rttBeta*float32(AbsDuration(r.smoothedRTT-sample)/time.Microsecond)) * time.Microsecond
 		r.smoothedRTT = time.Duration((float32(r.smoothedRTT/time.Microsecond)*oneMinusAlpha)+(float32(sample/time.Microsecond)*rttAlpha)) * time.Microsecond
 	}
+
+	// send updated srtt to flowtele socket
+	r.FlowteleSignalInterface.NewSrttMeasurement(now, r.smoothedRTT)
 }
 
 // SetMaxAckDelay sets the max_ack_delay
