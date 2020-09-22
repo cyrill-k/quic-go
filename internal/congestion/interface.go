@@ -24,3 +24,23 @@ type SendAlgorithmWithDebugInfos interface {
 	InRecovery() bool
 	GetCongestionWindow() protocol.ByteCount
 }
+
+type FlowteleCongestionControlModifier interface {
+	ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool
+
+	SetFixedRate(rateInBytePerSecond Bandwidth)
+}
+
+// FlowteleSendAlgorithmWithDebugInfo adds flowtele CC control functions to SendAlgorithmWithDebugInfo
+type FlowteleSendAlgorithm interface {
+	SendAlgorithm
+
+	FlowteleCongestionControlModifier
+}
+
+// FlowteleSendAlgorithmWithDebugInfo adds flowtele CC control functions to SendAlgorithmWithDebugInfo
+type FlowteleSendAlgorithmWithDebugInfos interface {
+	SendAlgorithmWithDebugInfos
+
+	FlowteleCongestionControlModifier
+}

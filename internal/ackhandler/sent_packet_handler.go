@@ -94,6 +94,38 @@ type sentPacketHandler struct {
 var _ SentPacketHandler = &sentPacketHandler{}
 var _ sentPacketTracker = &sentPacketHandler{}
 
+// NewFlowteleSentPacketHandler creates a new sentPacketHandler using flowtele cubic
+func newFlowteleSentPacketHandler(
+	initialPacketNumber protocol.PacketNumber,
+	rttStats *congestion.RTTStats,
+	pers protocol.Perspective,
+	traceCallback func(quictrace.Event),
+	qlogger qlog.Tracer,
+	logger utils.Logger,
+	flowteleSignalInterface *congestion.FlowteleSignalInterface,
+) *sentPacketHandler {
+	congestion := congestion.NewFlowteleCubicSender(
+		congestion.DefaultClock{},
+		rttStats,
+		true, // use Reno
+		flowteleSignalInterface,
+	)
+
+	return &sentPacketHandler{
+		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
+		peerAddressValidated:           pers == protocol.PerspectiveClient,
+		initialPackets:                 newPacketNumberSpace(initialPacketNumber),
+		handshakePackets:               newPacketNumberSpace(0),
+		appDataPackets:                 newPacketNumberSpace(0),
+		rttStats:                       rttStats,
+		congestion:                     congestion,
+		perspective:                    pers,
+		traceCallback:                  traceCallback,
+		qlogger:                        qlogger,
+		logger:                         logger,
+	}
+}
+
 func newSentPacketHandler(
 	initialPacketNumber protocol.PacketNumber,
 	rttStats *congestion.RTTStats,
@@ -178,6 +210,14 @@ func (h *sentPacketHandler) dropPackets(encLevel protocol.EncryptionLevel) {
 	h.ptoCount = 0
 	h.numProbesToSend = 0
 	h.ptoMode = SendNone
+}
+
+func (s *sentPacketHandler) ApplyControl(beta float64, cwnd_adjust int64, cwnd_max_adjust int64, use_conservative_allocation bool) bool {
+	return s.congestion.(congestion.FlowteleSendAlgorithmWithDebugInfos).ApplyControl(beta, cwnd_adjust, cwnd_max_adjust, use_conservative_allocation)
+}
+
+func (s *sentPacketHandler) SetFixedRate(rateInBitsPerSecond congestion.Bandwidth) {
+	s.congestion.(congestion.FlowteleSendAlgorithmWithDebugInfos).SetFixedRate(rateInBitsPerSecond)
 }
 
 func (h *sentPacketHandler) ReceivedBytes(n protocol.ByteCount) {

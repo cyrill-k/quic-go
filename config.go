@@ -68,6 +68,11 @@ func populateConfig(config *Config) *Config {
 		maxIncomingUniStreams = 0
 	}
 
+	flowteleSignalInterface := config.FlowteleSignalInterface
+	if flowteleSignalInterface == nil {
+		flowteleSignalInterface = createDummyFlowteleSignalInterface()
+	}
+
 	return &Config{
 		Versions:                              versions,
 		HandshakeTimeout:                      handshakeTimeout,
@@ -83,5 +88,6 @@ func populateConfig(config *Config) *Config {
 		TokenStore:                            config.TokenStore,
 		QuicTracer:                            config.QuicTracer,
 		GetLogWriter:                          config.GetLogWriter,
+		FlowteleSignalInterface:               flowteleSignalInterface,
 	}
 }

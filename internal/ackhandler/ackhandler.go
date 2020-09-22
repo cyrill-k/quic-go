@@ -8,6 +8,20 @@ import (
 	"github.com/lucas-clemente/quic-go/quictrace"
 )
 
+func NewFlowteleAckHandler(
+	initialPacketNumber protocol.PacketNumber,
+	rttStats *congestion.RTTStats,
+	pers protocol.Perspective,
+	traceCallback func(quictrace.Event),
+	qlogger qlog.Tracer,
+	logger utils.Logger,
+	version protocol.VersionNumber,
+	flowteleSignalInterface *congestion.FlowteleSignalInterface,
+) (SentPacketHandler, ReceivedPacketHandler) {
+	sph := newFlowteleSentPacketHandler(initialPacketNumber, rttStats, pers, traceCallback, qlogger, logger, flowteleSignalInterface)
+	return sph, newReceivedPacketHandler(sph, rttStats, logger, version)
+}
+
 func NewAckHandler(
 	initialPacketNumber protocol.PacketNumber,
 	rttStats *congestion.RTTStats,
