@@ -1641,7 +1641,7 @@ var _ = Describe("Session", func() {
 			defer GinkgoRecover()
 			<-finishHandshake
 			cryptoSetup.EXPECT().RunHandshake()
-			cryptoSetup.EXPECT().DropHandshakeKeys()
+			cryptoSetup.EXPECT().SetHandshakeConfirmed()
 			cryptoSetup.EXPECT().GetSessionTicket()
 			close(sess.handshakeCompleteChan)
 			sess.run()
@@ -1671,7 +1671,7 @@ var _ = Describe("Session", func() {
 			defer GinkgoRecover()
 			<-finishHandshake
 			cryptoSetup.EXPECT().RunHandshake()
-			cryptoSetup.EXPECT().DropHandshakeKeys()
+			cryptoSetup.EXPECT().SetHandshakeConfirmed()
 			cryptoSetup.EXPECT().GetSessionTicket().Return(make([]byte, size), nil)
 			close(sess.handshakeCompleteChan)
 			sess.run()
@@ -1757,7 +1757,7 @@ var _ = Describe("Session", func() {
 		go func() {
 			defer GinkgoRecover()
 			cryptoSetup.EXPECT().RunHandshake()
-			cryptoSetup.EXPECT().DropHandshakeKeys()
+			cryptoSetup.EXPECT().SetHandshakeConfirmed()
 			cryptoSetup.EXPECT().GetSessionTicket()
 			mconn.EXPECT().Write(gomock.Any())
 			close(sess.handshakeCompleteChan)
@@ -2031,7 +2031,7 @@ var _ = Describe("Session", func() {
 				defer GinkgoRecover()
 				cryptoSetup.EXPECT().RunHandshake().MaxTimes(1)
 				cryptoSetup.EXPECT().GetSessionTicket().MaxTimes(1)
-				cryptoSetup.EXPECT().DropHandshakeKeys().MaxTimes(1)
+				cryptoSetup.EXPECT().SetHandshakeConfirmed().MaxTimes(1)
 				close(sess.handshakeCompleteChan)
 				err := sess.run()
 				nerr, ok := err.(net.Error)
@@ -2278,7 +2278,7 @@ var _ = Describe("Client Session", func() {
 		sph := mockackhandler.NewMockSentPacketHandler(mockCtrl)
 		sess.sentPacketHandler = sph
 		sph.EXPECT().SetHandshakeConfirmed()
-		cryptoSetup.EXPECT().DropHandshakeKeys()
+		cryptoSetup.EXPECT().SetHandshakeConfirmed()
 		Expect(sess.handleHandshakeDoneFrame()).To(Succeed())
 	})
 
