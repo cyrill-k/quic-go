@@ -21,8 +21,8 @@ const (
 	VersionTLS      VersionNumber = 0xff00001d // draft-29
 	VersionWhatever VersionNumber = 1          // for when the version doesn't matter
 	VersionUnknown  VersionNumber = math.MaxUint32
-
-	VersionMilestone0_17 VersionNumber = 0xff00001d // QUIC WG draft-29
+	VersionDraft29  VersionNumber = 0xff00001d
+	VersionDraft32  VersionNumber = 0xff000020
 )
 
 // SupportedVersions lists the versions that the server supports
@@ -40,8 +40,12 @@ func (vn VersionNumber) String() string {
 		return "whatever"
 	case VersionUnknown:
 		return "unknown"
-	case VersionMilestone0_17:
-		return "QUIC WG draft-29"
+	case VersionDraft29:
+		return "draft-29"
+	case VersionDraft32:
+		return "draft-32"
+	case VersionTLS:
+		return "TLS dev version (WIP)"
 	default:
 		if vn.isGQUIC() {
 			return fmt.Sprintf("gQUIC %d", vn.toGQUICVersion())

@@ -15,6 +15,8 @@ var _ = Describe("Version", func() {
 		Expect(IsValidVersion(VersionMilestone0_17)).To(BeTrue())
 		Expect(IsValidVersion(VersionWhatever)).To(BeFalse())
 		Expect(IsValidVersion(VersionUnknown)).To(BeFalse())
+		Expect(IsValidVersion(VersionDraft29)).To(BeFalse())
+		Expect(IsValidVersion(VersionDraft32)).To(BeFalse())
 		Expect(IsValidVersion(1234)).To(BeFalse())
 	})
 
@@ -26,6 +28,8 @@ var _ = Describe("Version", func() {
 		Expect(VersionMilestone0_17.String()).To(ContainSubstring("QUIC WG draft-29"))
 		Expect(VersionWhatever.String()).To(Equal("whatever"))
 		Expect(VersionUnknown.String()).To(Equal("unknown"))
+		Expect(VersionDraft29.String()).To(Equal("draft-29"))
+		Expect(VersionDraft32.String()).To(Equal("draft-32"))
 		// check with unsupported version numbers from the wiki
 		Expect(VersionNumber(0x51303039).String()).To(Equal("gQUIC 9"))
 		Expect(VersionNumber(0x51303133).String()).To(Equal("gQUIC 13"))
