@@ -335,6 +335,7 @@ var newSession = func(
 		s.rttStats,
 		tracer,
 		logger,
+		s.version,
 	)
 	s.cryptoStreamHandler = cs
 	s.packer = newPacketPacker(
@@ -453,6 +454,7 @@ var newClientSession = func(
 		s.rttStats,
 		tracer,
 		logger,
+		s.version,
 	)
 	s.clientHelloWritten = clientHelloWritten
 	s.cryptoStreamHandler = cs
