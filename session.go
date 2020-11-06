@@ -1573,7 +1573,7 @@ func (s *session) sendPacket() (bool, error) {
 
 	if !s.handshakeConfirmed {
 		now := time.Now()
-		packet, err := s.packer.PackCoalescedPacket(s.sentPacketHandler.AmplificationWindow())
+		packet, err := s.packer.PackCoalescedPacket()
 		if err != nil || packet == nil {
 			return false, err
 		}
